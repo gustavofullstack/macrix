@@ -438,6 +438,6 @@ public func registerAllTools(into registry: ToolRegistry) {
         // NOTE: key identity is not threaded into tool args in v0.3;
         // the server stamps usage per key, and this reports the global tier.
         // Per-key self-report lands in v0.4.
-        textContent("tier \(License.current().tier.rawValue) — per-key detail via server log; quotas: free 1000/day/key, pro/lifetime unlimited.")
+        textContent("tiers free(1k/d) starter$20(10k/d) growth$50(50k/d) scale$100(200k/d) max$200(unlimited) lifetime(unlimited) — now: \(License.current().tier.rawValue)")
     })
 }

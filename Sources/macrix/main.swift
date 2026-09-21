@@ -64,7 +64,7 @@ case "license-issue":
     var months = 1
     let rest = Array(args.dropFirst())
     if let i = rest.firstIndex(of: "--tier"), i + 1 < rest.count {
-        tier = License.Tier(rawValue: rest[i + 1]) ?? .lifetime
+        tier = License.Tier(name: rest[i + 1]) ?? .lifetime
     }
     if let i = rest.firstIndex(of: "--months"), i + 1 < rest.count, let m = Int(rest[i + 1]) {
         months = m

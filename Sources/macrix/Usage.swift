@@ -7,13 +7,32 @@ import CryptoKit
 ///   commercial free tier we cloned away from); pro/lifetime = unlimited.
 /// - No silent blocks: over-quota calls get error -32000 naming the tier.
 public enum License {
-    public enum Tier: String, Sendable {
-        case free, pro, lifetime
+    public enum Tier: String, Sendable, CaseIterable {
+        case free, starter, growth, scale, max, lifetime
+        /// Monthly price in USD. Rule from the founder: price = 2x measured cost.
+        public var priceUSD: Int {
+            switch self {
+            case .free: return 0
+            case .starter: return 20
+            case .growth: return 50
+            case .scale: return 100
+            case .max: return 200
+            case .lifetime: return -1  // one-time, not monthly
+            }
+        }
         public var dailyQuota: Int? {
             switch self {
             case .free: return 1000
-            case .pro, .lifetime: return nil
+            case .starter: return 10_000
+            case .growth: return 50_000
+            case .scale: return 200_000
+            case .max, .lifetime: return nil
             }
+        }
+        /// Legacy alias: v0.3 `pro` is now `growth`.
+        public init?(name: String) {
+            if name == "pro" { self = .growth; return }
+            self.init(rawValue: name)
         }
     }
 
@@ -36,12 +55,16 @@ public enum License {
         var tier = Tier.free, key = "", expires: String?
         for line in content.components(separatedBy: .newlines) {
             let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("tier=") { tier = Tier(rawValue: String(t.dropFirst(5))) ?? .free }
+            if t.hasPrefix("tier=") { tier = Tier(name: String(t.dropFirst(5))) ?? .free }
             if t.hasPrefix("key=") { key = String(t.dropFirst(4)) }
             if t.hasPrefix("expires=") { expires = String(t.dropFirst(8)) }
         }
-        if tier == .pro, let exp = expires, exp < utcDay() {
-            return Info(tier: .free, key: key, expires: exp)
+        switch tier {
+        case .starter, .growth, .scale:
+            if let exp = expires, exp < utcDay() {
+                return Info(tier: .free, key: key, expires: exp)
+            }
+        default: break
         }
         return Info(tier: tier, key: key, expires: expires)
     }
@@ -51,10 +74,12 @@ public enum License {
         // account server; the file format (tier/key/expires) stays the same.
         let key = "mx_\(tier.rawValue)_\(randomSuffix())"
         var exp = ""
-        if tier == .pro {
+        switch tier {
+        case .starter, .growth, .scale:
             let d = Calendar.current.date(byAdding: .month, value: max(1, months), to: Date()) ?? Date()
             let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
             exp = f.string(from: d)
+        default: break
         }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         try? "tier=\(tier.rawValue)\nkey=\(key)\nexpires=\(exp)\n".write(toFile: licensePath, atomically: true, encoding: .utf8)
