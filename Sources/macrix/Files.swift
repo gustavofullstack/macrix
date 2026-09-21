@@ -9,7 +9,10 @@ public enum Files {
         ".vault", "keychain", "Secrets", ".pyc", ".secrets",
     ]
     static func denied(_ path: String) -> Bool {
-        deniedSubstrings.contains { path.contains($0) }
+        // Case-insensitive: APFS is usually case-insensitive, so ".SSH"
+        // must match ".ssh" — compare lowered on both sides.
+        let lower = path.lowercased()
+        return deniedSubstrings.contains { lower.contains($0.lowercased()) }
     }
     static func read(_ path: String) -> String {
         if denied(path) { return "refused: secret-adjacent path." }

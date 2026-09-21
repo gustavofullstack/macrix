@@ -6,6 +6,7 @@ public enum Git {
     static let cap = 100_000
 
     static func repoRoot(_ path: String) -> String? {
+        if Files.denied(path) { return nil }
         let p = expand(path)
         guard !p.isEmpty else { return nil }
         let (code, out) = runProcess("/usr/bin/git", ["-C", p, "rev-parse", "--show-toplevel"], timeoutSeconds: 15)
@@ -14,6 +15,7 @@ public enum Git {
     }
 
     static func status(_ path: String) -> String {
+        if Files.denied(path) { return "refused: secret-adjacent path." }
         guard let root = repoRoot(path) else { return "not a git repo." }
         let (code, out) = runProcess("/usr/bin/git", ["-C", root, "status", "--short", "--branch"], timeoutSeconds: 20)
         guard code == 0 else { return "git status failed." }
@@ -22,6 +24,7 @@ public enum Git {
     }
 
     static func log(_ path: String, n: Int) -> String {
+        if Files.denied(path) { return "refused: secret-adjacent path." }
         guard let root = repoRoot(path) else { return "not a git repo." }
         let count = min(max(n, 1), 30)
         let (code, out) = runProcess("/usr/bin/git",
@@ -31,6 +34,7 @@ public enum Git {
     }
 
     static func diffstat(_ path: String) -> String {
+        if Files.denied(path) { return "refused: secret-adjacent path." }
         guard let root = repoRoot(path) else { return "not a git repo." }
         let (code, out) = runProcess("/usr/bin/git",
             ["-C", root, "diff", "--stat"], timeoutSeconds: 20)
