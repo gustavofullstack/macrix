@@ -32,4 +32,12 @@ final class LicenseTests: XCTestCase {
         for _ in 0..<1005 { Usage.record(keyFP: fp, tool: "health") }
         XCTAssertNotNil(Usage.check(keyFP: fp, tool: "health", tier: .free))
     }
+    func testAdmitAtomic() {
+        let fp = "admitfp-\(Int(Date().timeIntervalSince1970))"
+        XCTAssertNil(Usage.admit(keyFP: fp, tool: "health", tier: .free))
+        XCTAssertNil(Usage.check(keyFP: fp, tool: "health", tier: .free))  // 1 < 1000
+        for _ in 0..<999 { Usage.record(keyFP: fp, tool: "health") }  // total 1000
+        XCTAssertNotNil(Usage.admit(keyFP: fp, tool: "health", tier: .free))  // over, uncounted
+        XCTAssertNil(Usage.admit(keyFP: fp, tool: "health", tier: .lifetime))  // unlimited
+    }
 }

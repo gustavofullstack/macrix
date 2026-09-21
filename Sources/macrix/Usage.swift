@@ -110,43 +110,59 @@ public enum Usage {
         var keys: [String: [String: Int]]  // fp -> tool -> count
     }
 
-    static func load() -> Day {
-        lock.withLock {
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: License.usagePath)),
-               var day = try? JSONDecoder().decode(Day.self, from: data),
-               day.date == License.utcDay() {
-                return day
-            }
-            return Day(date: License.utcDay(), keys: [:])
+    private static func loadLocked() -> Day {
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: License.usagePath)),
+           let day = try? JSONDecoder().decode(Day.self, from: data),
+           day.date == License.utcDay() {
+            return day
+        }
+        return Day(date: License.utcDay(), keys: [:])
+    }
+
+    private static func saveLocked(_ day: Day) {
+        try? FileManager.default.createDirectory(atPath: License.dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(day) {
+            try? data.write(to: URL(fileURLWithPath: License.usagePath))
         }
     }
 
-    static func save(_ day: Day) {
-        lock.withLock {
-            try? FileManager.default.createDirectory(atPath: License.dir, withIntermediateDirectories: true)
-            if let data = try? JSONEncoder().encode(day) {
-                try? data.write(to: URL(fileURLWithPath: License.usagePath))
-            }
-        }
-    }
+    static func load() -> Day { lock.withLock { loadLocked() } }
 
-    /// Returns nil when allowed, or an over-quota message.
-    public static func check(keyFP: String, tool: String, tier: License.Tier) -> String? {
+    static func save(_ day: Day) { lock.withLock { saveLocked(day) } }
+
+    private static func overMessage(_ day: Day, keyFP: String, tier: License.Tier) -> String? {
         guard let quota = tier.dailyQuota else { return nil }
-        var day = load()
-        let used = day.keys[keyFP]?[tool] ?? 0
         let total = day.keys[keyFP]?.values.reduce(0, +) ?? 0
-        _ = used
         if total >= quota {
             return "daily quota exceeded for tier '\(tier.rawValue)' (\(quota)/day/key) — upgrade with `macrix license-issue --tier pro|lifetime`."
         }
         return nil
     }
 
+    /// Returns nil when allowed, or an over-quota message.
+    public static func check(keyFP: String, tool: String, tier: License.Tier) -> String? {
+        lock.withLock { overMessage(loadLocked(), keyFP: keyFP, tier: tier) }
+    }
+
     public static func record(keyFP: String, tool: String) {
-        var day = load()
-        day.keys[keyFP, default: [:]][tool, default: 0] += 1
-        save(day)
+        lock.withLock {
+            var day = loadLocked()
+            day.keys[keyFP, default: [:]][tool, default: 0] += 1
+            saveLocked(day)
+        }
+    }
+
+    /// Atomic admit: check + record under one lock so concurrent bursts
+    /// cannot overshoot the quota. Returns nil when admitted, else the
+    /// over-quota message (nothing recorded).
+    public static func admit(keyFP: String, tool: String, tier: License.Tier) -> String? {
+        lock.withLock {
+            var day = loadLocked()
+            if let over = overMessage(day, keyFP: keyFP, tier: tier) { return over }
+            day.keys[keyFP, default: [:]][tool, default: 0] += 1
+            saveLocked(day)
+            return nil
+        }
     }
 
     public static func status(keyFP: String, tier: License.Tier) -> String {

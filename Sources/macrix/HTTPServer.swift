@@ -99,13 +99,12 @@ public final class HTTPServer: @unchecked Sendable {
         let tier = License.current().tier
         if case .object(let o) = rpc, o["method"]?.string == "tools/call" {
             let tname = o["params"]?["name"]?.string ?? "?"
-            if let over = Usage.check(keyFP: fp, tool: tname, tier: tier) {
+            if let over = Usage.admit(keyFP: fp, tool: tname, tier: tier) {
                 let err = try! JSONEncoder().encode(jsonError(code: -32000, message: over, id: o["id"]))
                 send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: err)
                 return
             }
             if let resp = await MCPDispatcher.handle(request: rpc, registry: registry) {
-                Usage.record(keyFP: fp, tool: tname)
                 let data = (try? JSONEncoder().encode(resp)) ?? Data()
                 send(connection: connection, status: "200 OK",
                      headers: ["Content-Type": "application/json", "Mcp-Session-Id": sessionID],
