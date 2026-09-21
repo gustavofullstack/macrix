@@ -10,7 +10,13 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "macrix",
-            path: "Sources/macrix"
+            path: "Sources/macrix",
+            exclude: ["Info.plist"],
+            linkerSettings: [
+                // Embed Info.plist so TCC accepts the mic/speech requests of a bare CLI binary.
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
+                              "-Xlinker", "Sources/macrix/Info.plist"]),
+            ]
         ),
         .testTarget(
             name: "macrixTests",

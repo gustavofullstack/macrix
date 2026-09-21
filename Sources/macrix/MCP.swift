@@ -1,7 +1,7 @@
 import Foundation
 
 public let mcpServerName = "macrix"
-public let mcpServerVersion = "0.24.4"
+public let mcpServerVersion = "0.25.0"
 
 public struct Tool: Sendable {
     public let name: String

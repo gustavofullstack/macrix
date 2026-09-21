@@ -1,6 +1,6 @@
 # macrix
 
-Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.24.0: 100 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
+Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.25.0: 102 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
 
 Inspirado no [Macuse](https://macuse.app), reescrito do zero em Swift, sem dependências externas.
 
@@ -28,9 +28,9 @@ macrix keys     # de onde as chaves vêm + quantas
 macrix version
 ```
 
-Endpoints: `POST /mcp` (Bearer [REDACTED]ório), `GET /health` (aberto), `GET /` (console, aberto), `GET /catalog` (100 tools em JSON, aberto), `GET /usage` (medição da chave, Bearer).
+Endpoints: `POST /mcp` (Bearer [REDACTED]ório), `GET /health` (aberto), `GET /` (console, aberto), `GET /catalog` (102 tools em JSON, aberto), `GET /usage` (medição da chave, Bearer).
 
-## Tools (v0.24 — 100)
+## Tools (v0.25 — 102)
 
 Contagem medida via `GET /catalog` em 21/09/2026. Fonte da verdade é o endpoint; a tabela agrupa por família:
 
@@ -46,8 +46,23 @@ Contagem medida via `GET /catalog` em 21/09/2026. Fonte da verdade é o endpoint
 | Clipboard e UI (clip, open, notify, voz-arquivo, quit) | 6 |
 | Catálogo e metering (catalog, usage, providers, health) | 6 |
 | Git (status, log, diff) + relógio | 5 |
+| Voz → Jev → ação antes da frase acabar (`voice_decide`, `voice_listen`) | 2 |
 
 Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Access. Sem permissão, a tool devolve erro estruturado — nunca quebra a sessão. Voz nunca toca no alto-falante (`tts_render` gera arquivo).
+
+## Voz: age antes de a frase acabar (v0.25)
+
+O padrão do demo de Andy Gao (X, 18/09/2026) com o Jev: a fala é transcrita em streaming pelo Speech.framework e **cada trecho parcial vira uma chamada ao Jev** com perguntas tipadas — `intent` (choice), `app` (choice entre candidatos que o código extraiu), `complete`, `addressed`, `destructive` (noul). O código decide: abrir app dispara assim que `intent ≥ 0,70` e `app ≥ 0,60`, mesmo com `complete` baixo; fechar app, abrir URL e pesquisar esperam `complete ≥ 0,60`; conversa (`addressed < 0,50`) é ignorada; a mesma ação não repete dentro da mesma frase. O Jev nunca gera texto: nome de app, URL e termo de busca saem do transcript por código e o Jev só escolhe.
+
+```sh
+macrix voice-say "abre o notas e"             # dry-run: mostra os números do Jev e o veredito
+macrix voice-say "abre o notas e" --execute   # age (abre o Notes)
+macrix voice --seconds 20 --locale pt-BR      # microfone ao vivo; --dry-run só mostra
+```
+
+Tools MCP: `voice_decide` (transcript → decisão; `execute=true` age; `is_final=true` fecha a frase) e `voice_listen` (microfone por N s, age a cada parcial). Chave: `TYPESAFE_API_KEY` no ambiente ou no cofre `~/.config/frota/credenciais.env`; modelo fixado `jev-1.13.0`.
+
+Permissões: o binário embute um `Info.plist` (`__info_plist`) com `NSMicrophoneUsageDescription` e `NSSpeechRecognitionUsageDescription`. Rodando a partir de um terminal de outro app, o macOS atribui o pedido ao **app pai** (Claude, Terminal…) e pode abortar com TCC; via launchd (`com.sug.macrix`) ou `launchctl submit` a atribuição é ao próprio macrix e o diálogo de permissão aparece uma vez.
 
 ## cmux
 

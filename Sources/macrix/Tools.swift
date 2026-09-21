@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. 100 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 102 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -988,4 +988,35 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
         textContent(TextUtil.csvCols(args["path"]?.string ?? ""))
     })
+
+    // MARK: - v0.25 voice → Jev → action before the sentence ends (Andy Gao pattern)
+    registry.register(Tool(
+        name: "voice_decide",
+        description: "Run one (partial) transcript through Jev: intent, target app, complete?, addressed?, destructive? — then gate. execute=true acts (open/quit app, open url, search). Streaming-safe: call it on every partial; repeats are deduped per utterance.",
+        inputSchema: objSchema(["transcript": "string", "is_final": "string", "execute": "string"], required: ["transcript"])) { args async in
+        guard let key = Voice.apiKey() else {
+            return textContent("voice unavailable: TYPESAFE_API_KEY not in env nor in ~/.config/frota/credenciais.env.", isError: true)
+        }
+        let brain = VoiceBrain(client: TypeSafeHTTP(key: key), installed: Apps.installed())
+        let isFinal = (args["is_final"]?.string ?? "false") == "true" || args["is_final"]?.bool == true
+        let execute = (args["execute"]?.string ?? "false") == "true" || args["execute"]?.bool == true
+        return textContent(VoiceActor.step(brain: brain, transcript: args["transcript"]?.string ?? "",
+                                           isFinal: isFinal, utterance: VoiceShared.utterance, execute: execute))
+    })
+    registry.register(Tool(
+        name: "voice_listen",
+        description: "Listen on the Mac microphone for N seconds (max 300); every partial transcript goes to Jev and acts mid-sentence. Needs Speech Recognition + Microphone permission for the macrix process. locale default pt-BR; execute default true.",
+        inputSchema: objSchema(["seconds": "string", "locale": "string", "execute": "string"])) { args async in
+        #if canImport(Speech)
+        let secs = Int(args["seconds"]?.string ?? "") ?? args["seconds"]?.int ?? 15
+        let locale = args["locale"]?.string ?? "pt-BR"
+        let execute = (args["execute"]?.string ?? "true") != "false"
+        return textContent(VoiceLoop.run(seconds: secs, locale: locale, execute: execute) { _ in })
+        #else
+        return textContent("voice_listen unavailable: Speech framework missing.", isError: true)
+        #endif
+    })
 }
+
+/// One utterance memory shared by voice_decide calls from the same client stream.
+enum VoiceShared { static let utterance = VoiceActor.Utterance() }

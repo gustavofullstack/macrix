@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>tech.triqhub.macrix</string>
+  <key>CFBundleName</key><string>macrix</string>
+  <key>CFBundleShortVersionString</key><string>0.25.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>macrix voice: ouve o microfone para agir por voz (Jev decide a cada trecho).</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>macrix voice: transcreve a fala em streaming para agir antes de a frase acabar.</string>
+</dict>
+</plist>

@@ -8,6 +8,11 @@ func printUsage() {
       macrix serve [--port N]     Start the MCP server (default port 35730)
       macrix keys                 Print where API keys are loaded from
       macrix version              Print version
+      macrix voice [--seconds N] [--locale pt-BR] [--dry-run]
+                                  Mic → Jev → action before the sentence ends
+      macrix voice-say "<texto>"  Same pipeline on a typed transcript (dry-run)
+      macrix voice-file <audio> [--locale pt-BR] [--dry-run]
+                                  Same pipeline on an audio file (partials → Jev)
     Keys: env MACRIX_KEYS (comma-separated) and/or ~/.config/macrix/keys
     Jev hook: set MACRIX_JEV=1 to enable the jev_rerank tool.
     """)
@@ -53,6 +58,32 @@ case "serve":
         fputs("macrix: \(error.localizedDescription)\n", stderr)
         exit(1)
     }
+case "voice":
+    let rest = Array(args.dropFirst())
+    var seconds = 20, locale = "pt-BR", execute = true
+    if let i = rest.firstIndex(of: "--seconds"), i + 1 < rest.count, let s = Int(rest[i + 1]) { seconds = s }
+    if let i = rest.firstIndex(of: "--locale"), i + 1 < rest.count { locale = rest[i + 1] }
+    if rest.contains("--dry-run") { execute = false }
+    print("macrix voice: listening \(seconds)s (\(locale)) — every partial goes to Jev \(Voice.model); \(execute ? "acting" : "dry-run")")
+    fflush(stdout)
+    let out = VoiceLoop.run(seconds: seconds, locale: locale, execute: execute) { line in
+        print(line); print("---"); fflush(stdout)
+    }
+    if out.hasPrefix("voice unavailable") || out.hasPrefix("listened") { print(out) }
+case "voice-file":
+    let rest = Array(args.dropFirst())
+    guard let path = rest.first, !path.hasPrefix("--") else { print("usage: macrix voice-file <audio> [--locale pt-BR] [--dry-run]"); exit(2) }
+    var locale = "pt-BR"
+    if let i = rest.firstIndex(of: "--locale"), i + 1 < rest.count { locale = rest[i + 1] }
+    let execute = !rest.contains("--dry-run")
+    let out = VoiceFile.run(path: path, locale: locale, execute: execute) { line in print(line); print("---"); fflush(stdout) }
+    if out.hasPrefix("voice") { print(out) }
+case "voice-say":
+    guard let text = args.dropFirst().first else { print("usage: macrix voice-say \"<texto>\" [--execute]"); exit(2) }
+    guard let key = Voice.apiKey() else { print("voice unavailable: TYPESAFE_API_KEY missing."); exit(1) }
+    let brain = VoiceBrain(client: TypeSafeHTTP(key: key), installed: Apps.installed())
+    print(VoiceActor.step(brain: brain, transcript: text, isFinal: true, utterance: VoiceActor.Utterance(),
+                          execute: args.contains("--execute")))
 case "license":
     let info = License.current()
     var line = "tier: " + info.tier.rawValue

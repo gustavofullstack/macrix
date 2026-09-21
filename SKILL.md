@@ -1,6 +1,6 @@
 ---
 name: macrix
-description: macOS automation MCP server (100 tools) with concurrent multi-agent access. Use when the user needs calendar, reminders, notes, shortcuts, files, git, web screenshots, system probes, or Jev/TypeSafe judgments without the 100-calls/day commercial cap.
+description: macOS automation MCP server (102 tools) with concurrent multi-agent access. Use when the user needs calendar, reminders, notes, shortcuts, files, git, web screenshots, system probes, or Jev/TypeSafe judgments without the 100-calls/day commercial cap.
 ---
 
 # macrix skill
@@ -13,7 +13,7 @@ Console: `GET /` (no auth). Full tool list: `GET /catalog` (no auth,
 Protocol is MCP streamable HTTP, plain-JSON responses:
 `initialize` -> `notifications/initialized` -> `tools/list` -> `tools/call`.
 
-100 tools in families: Apple apps (calendar, reminders, notes,
+102 tools in families: Apple apps (calendar, reminders, notes,
 shortcuts, mail/messages, contacts, screen), Jev/TypeSafe (route,
 rerank, eval, check, skill, models), computer-use, system probes,
 files/text/zip/csv, git, clock, headless Chromium, network, clipboard,
@@ -34,3 +34,5 @@ user exactly which one, do not retry in a loop.
 
 Audio is never played (`tts_render` writes an AIFF file); treat the
 returned path as the artifact.
+
+Voice (v0.25): `voice_decide` runs a partial transcript through Jev (intent/app/complete/addressed/destructive) and acts mid-sentence when execute=true; `voice_listen` does the same from the microphone for N seconds. Pattern from Andy Gao's Jev demo.
