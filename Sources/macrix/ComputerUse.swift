@@ -95,6 +95,50 @@ enum CU {
         return "\(app.localizedName ?? "?") (\(app.bundleIdentifier ?? "?"), pid \(app.processIdentifier))"
     }
 
+    /// Find first element matching role+title substrings, return its center.
+    static func findElement(role roleQ: String, title titleQ: String) -> CGPoint? {
+        guard trusted() else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+              let app = focused as! AXUIElement? else { return nil }
+        var found: AXUIElement?
+        func walk(_ el: AXUIElement, depth: Int) {
+            guard found == nil, depth <= 4 else { return }
+            var role: CFTypeRef?
+            var title: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
+            AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &title)
+            let r = ((role as? String) ?? "").lowercased()
+            let t = ((title as? String) ?? "").lowercased()
+            // AXDescription as fallback title for buttons without titles
+            var desc: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &desc)
+            let d = ((desc as? String) ?? "").lowercased()
+            if r.contains(roleQ.lowercased()) && (t.contains(titleQ.lowercased()) || d.contains(titleQ.lowercased())) {
+                found = el
+                return
+            }
+            var kids: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &kids) == .success,
+               let arr = kids as? [AXUIElement] {
+                for k in arr.prefix(30) { walk(k, depth: depth + 1) }
+            }
+        }
+        walk(app, depth: 0)
+        guard let el = found else { return nil }
+        var pos: CFTypeRef?
+        var size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pos) == .success,
+              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size) == .success else { return nil }
+        var pt = CGPoint.zero, sz = CGSize.zero
+        guard AXValueGetType(pos as! AXValue) == .cgPoint,
+              AXValueGetType(size as! AXValue) == .cgSize else { return nil }
+        AXValueGetValue(pos as! AXValue, .cgPoint, &pt)
+        AXValueGetValue(size as! AXValue, .cgSize, &sz)
+        return CGPoint(x: pt.x + sz.width / 2, y: pt.y + sz.height / 2)
+    }
+
     /// Bounded AX tree dump: role + title + position, depth<=3, max 100 nodes.
     static func axQuery() -> String {
         guard trusted() else { return deniedText }

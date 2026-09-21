@@ -16,12 +16,21 @@ func objSchema(_ props: [String: String], required: [String] = []) -> JSONValue 
                     "required": .array(required.map { .string($0) })])
 }
 
-func runProcess(_ path: String, _ args: [String], timeoutSeconds: Double = 30) -> (Int32, String) {
+func runProcess(_ path: String, _ args: [String], timeoutSeconds: Double = 30, stdin: String? = nil) -> (Int32, String) {
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: path)
     proc.arguments = args
     let pipe = Pipe()
     proc.standardOutput = pipe
+    if let input = stdin {
+        let inp = Pipe()
+        inp.fileHandleForWriting.writeabilityHandler = { h in
+            h.write(Data(input.utf8))
+            try? h.close()
+            inp.fileHandleForWriting.writeabilityHandler = nil
+        }
+        proc.standardInput = inp
+    }
     // NOTE (fleet review): stderr goes to null, never an unread pipe —
     // a full pipe would deadlock the child until the deadline kill.
     proc.standardError = FileHandle.nullDevice
@@ -302,9 +311,9 @@ public func registerAllTools(into registry: ToolRegistry) {
             return textContent("missing shortcut name.", isError: true)
         }
         var cmd = ["run", name]
-        if args["input"]?.string != nil { cmd += ["-i", "-"] }
-        // NOTE: stdin piping omitted in v0.1; input param reserved for v0.2.
-        let (code, out) = runProcess("/usr/bin/shortcuts", cmd, timeoutSeconds: 120)
+        var stdin: String?
+        if let input = args["input"]?.string { cmd += ["-i", "-"]; stdin = input }
+        let (code, out) = runProcess("/usr/bin/shortcuts", cmd, timeoutSeconds: 120, stdin: stdin)
         if code != 0 { return textContent("shortcut failed (exit \(code)): \(out)", isError: true) }
         return textContent(out.trimmingCharacters(in: .whitespacesAndNewlines))
     })
@@ -654,5 +663,31 @@ public func registerAllTools(into registry: ToolRegistry) {
         description: "Set clipboard text (max 100KB).",
         inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
         textContent(Net.clipWrite(args["text"]?.string ?? ""))
+    })
+
+    // MARK: - v0.14 spotlight + AX click-on-element (G1)
+    registry.register(Tool(
+        name: "meta_read",
+        description: "File metadata via mdls (first 30 lines). Secret paths refused.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Meta.read(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "meta_search",
+        description: "Spotlight filename/content search (max 20 hits).",
+        inputSchema: objSchema(["query": "string"], required: ["query"])) { args async in
+        textContent(Meta.search(args["query"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "cu_click_element",
+        description: "Find a UI element by role+title substring in the focused app and click its center. Needs Accessibility.",
+        inputSchema: objSchema(["role": "string", "title": "string"], required: ["role", "title"])) { args async in
+        guard let role = args["role"]?.string, let title = args["title"]?.string else {
+            return textContent("missing role/title.", isError: true)
+        }
+        guard let pt = CU.findElement(role: role, title: title) else {
+            return textContent("element not found (or accessibility denied).", isError: true)
+        }
+        return CU.click(x: pt.x, y: pt.y) ? textContent("clicked element at (\(Int(pt.x)), \(Int(pt.y)))") : textContent(CU.deniedText, isError: true)
     })
 }
