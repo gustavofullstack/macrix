@@ -90,7 +90,7 @@ final class EnvInventoryTests: XCTestCase {
 final class HarnessGateTests: XCTestCase {
     func makeGate() -> HarnessGate {
         let p = "/tmp/macrix_gate_\(UUID().uuidString).jsonl"
-        return HarnessGate(ledgerPath: p)
+        return HarnessGate(ledgerPath: p, ledgerConfig: nil)
     }
     func ok(_ out: String, secs: Double = 1) -> Result<Harness.RunResult, JevError> {
         .success(Harness.RunResult(agent: .muse, argv: ["x"], exit: 0, seconds: secs, output: out, truncated: false))
@@ -102,12 +102,13 @@ final class HarnessGateTests: XCTestCase {
         XCTAssertEqual(g.settle(.claude_sonnet, opId: nil, result: ok("fine")), "settled")
         XCTAssertNil(g.admit(.claude_sonnet, opId: nil))
     }
-    func testDedupeWindow() {
+    func testDedupeIsForever() {
         let g = makeGate(); let t0 = Date()
         XCTAssertNil(g.admit(.muse, opId: "op-1", now: t0))
         _ = g.settle(.muse, opId: "op-1", result: ok("done"), now: t0)
         XCTAssertEqual(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(60)), .duplicate("op-1"))
-        XCTAssertNil(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(700)))   // window expired
+        XCTAssertEqual(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(700)), .duplicate("op-1"))   // replay after 10 min is still a replay
+        XCTAssertEqual(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(86_400 * 7)), .duplicate("op-1"))
     }
     func testQuotaSuspendsLaneAndTimeoutIsUnknown() {
         let g = makeGate(); let t0 = Date()
@@ -136,7 +137,7 @@ final class HarnessGateTests: XCTestCase {
 
 
 final class JourneyTests: XCTestCase {
-    func gate() -> HarnessGate { HarnessGate(ledgerPath: "/tmp/macrix_journey_\(UUID().uuidString).jsonl") }
+    func gate() -> HarnessGate { HarnessGate(ledgerPath: "/tmp/macrix_journey_\(UUID().uuidString).jsonl", ledgerConfig: nil) }
     func fakeRoute(_ lane: String, review: Double) -> FakeJev {
         FakeJev(.object(["lane": .object(["choice": .string(lane), "probabilities": .object([lane: .number(0.9)])]),
                          "needs_review": .object(["noul": .number(review)])]))
@@ -176,10 +177,10 @@ final class GatePersistenceAndApprovalTests: XCTestCase {
     func ok(_ lane: Harness.Agent) -> Result<Harness.RunResult, JevError> { .success(Harness.RunResult(agent: lane, argv: ["x"], exit: 0, seconds: 1, output: "ok", truncated: false)) }
     func testStateSurvivesRestartAndInFlightBecomesUnknown() {
         let p = path()
-        let g1 = HarnessGate(ledgerPath: p)
+        let g1 = HarnessGate(ledgerPath: p, ledgerConfig: nil)
         XCTAssertNil(g1.admit(.muse, opId: "op-A")); _ = g1.settle(.muse, opId: "op-A", result: .success(Harness.RunResult(agent: .muse, argv: [], exit: 1, seconds: 2, output: "429 quota", truncated: false)))
         XCTAssertNil(g1.admit(.claude_sonnet, opId: "op-B"))          // left in flight → simulated crash
-        let g2 = HarnessGate(ledgerPath: p)                             // "restart"
+        let g2 = HarnessGate(ledgerPath: p, ledgerConfig: nil)                             // "restart"
         XCTAssertEqual(g2.admit(.claude_sonnet, opId: "op-A"), .duplicate("op-A"))   // seen persisted (dedupe is per op_id)
         if case .suspended(.muse, _)? = g2.admit(.muse, opId: "op-Z") {} else { XCTFail("suspension should persist") }
         XCTAssertNil(g2.admit(.claude_sonnet, opId: "op-C"))            // slot recovered
@@ -189,14 +190,15 @@ final class GatePersistenceAndApprovalTests: XCTestCase {
         for f in [p, g2.statePath] { try? FileManager.default.removeItem(atPath: f) }
     }
     func testApprovalIsSingleUseBoundToTaskAndExpires() {
-        let g = HarnessGate(ledgerPath: path()); let t0 = Date()
-        let a = g.issueApproval(journeyId: "J-9", lane: .claude_fable, task: "refatorar o daemon", now: t0)
+        let g = HarnessGate(ledgerPath: path(), ledgerConfig: nil); let t0 = Date()
+        let a = g.issueApproval(journeyId: "J-9", lane: .claude_fable, task: "refatorar o daemon", now: t0)!
         XCTAssertTrue(a.token.hasPrefix("apr_"))
         XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: "apr_wrong", task: "refatorar o daemon", now: t0), .wrongToken)
         XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon E apagar tudo", now: t0), .taskChanged)
         XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon", now: t0), .ok(.claude_fable))
         XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon", now: t0), .used)
-        let b = g.issueApproval(journeyId: "J-10", lane: .muse, task: "x", ttl: 10, now: t0)
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon", workspace: "/tmp/other"), .used)   // used wins, but a manifest change alone would also refuse
+        let b = g.issueApproval(journeyId: "J-10", lane: .muse, task: "x", ttl: 10, now: t0)!
         XCTAssertEqual(g.consumeApproval(journeyId: "J-10", token: b.token, task: "x", now: t0.addingTimeInterval(11)), .expired)
         XCTAssertEqual(g.consumeApproval(journeyId: "J-none", token: "apr_x", task: "x"), .missing)
         try? FileManager.default.removeItem(atPath: g.statePath)
@@ -205,22 +207,30 @@ final class GatePersistenceAndApprovalTests: XCTestCase {
         XCTAssertTrue(HarnessGate.touchesProduction("reiniciar o container no EasyPanel da produção"))
         XCTAssertTrue(HarnessGate.touchesProduction("ssh 100.110.127.44 docker restart api"))
         XCTAssertFalse(HarnessGate.touchesProduction("renomear variável no arquivo local"))
-        let g = HarnessGate(ledgerPath: path())
+        let g = HarnessGate(ledgerPath: path(), ledgerConfig: nil)
         let fake = FakeJev(.object(["lane": .object(["choice": .string("claude_fable"), "probabilities": .object(["claude_fable": .number(0.9)])]), "needs_review": .object(["noul": .number(0.2)])]))
         var ran = false
         let out = Journey.run(task: "docker restart api na producao", journeyId: "J-P", workspace: "/tmp", client: fake, gate: g, available: [.claude_fable]) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
         XCTAssertFalse(ran); XCTAssertTrue(out.hasSuffix("outcome: blocked_production"), out)
-        let a = g.issueApproval(journeyId: "J-P2", lane: .claude_fable, task: "docker stop api")
+        let a = g.issueApproval(journeyId: "J-P2", lane: .claude_fable, task: "docker stop api", workspace: "/tmp")!
         let out2 = Journey.approve(journeyId: "J-P2", token: a.token, task: "docker stop api", workspace: "/tmp", gate: g) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
         XCTAssertFalse(ran); XCTAssertTrue(out2.hasSuffix("outcome: blocked_production"), out2)
         try? FileManager.default.removeItem(atPath: g.statePath)
     }
     func testReviewedJourneyThenApproveRunsOnce() {
-        let g = HarnessGate(ledgerPath: path())
+        let g = HarnessGate(ledgerPath: path(), ledgerConfig: nil)
         let fake = FakeJev(.object(["lane": .object(["choice": .string("claude_opus"), "probabilities": .object(["claude_opus": .number(0.8)])]), "needs_review": .object(["noul": .number(0.9)])]))
         let out = Journey.run(task: "reescrever o parser de argumentos", journeyId: "J-R", workspace: "/tmp", client: fake, gate: g, available: [.claude_opus]) { _, _, _, _, _ in XCTFail("must not run"); return .failure(JevError("x")) }
         XCTAssertTrue(out.hasSuffix("outcome: needs_human_review"), out)
-        let token = out.split(separator: "\n").compactMap { l -> String? in guard let r = l.range(of: "apr_") else { return nil }; return String(l[r.lowerBound...]).split(separator: " ").first.map(String.init) }.first!
+        XCTAssertFalse(out.contains("apr_"), "token must not be returned to the MCP caller")
+        let file = out.split(separator: "\n").compactMap { l -> String? in guard let r = l.range(of: "Mac: ") else { return nil }; return String(l[r.upperBound...]) }.first!
+        let text = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+        let token = text.split(separator: "\n").first { $0.hasPrefix("token: ") }.map { String($0.dropFirst(7)) }!
+        XCTAssertTrue(token.hasPrefix("apr_"))
+        // changing a parameter of the manifest (workspace) kills the token
+        let wrongWs = Journey.approve(journeyId: "J-R", token: token, task: "reescrever o parser de argumentos", workspace: "/tmp/elsewhere", gate: g) { _, _, _, _, _ in XCTFail("must not run"); return .failure(JevError("x")) }
+        XCTAssertTrue(wrongWs.hasSuffix("outcome: refused_task_changed"), wrongWs)
+        try? FileManager.default.removeItem(atPath: file)
         var runs = 0
         let ok = Journey.approve(journeyId: "J-R", token: token, task: "reescrever o parser de argumentos", workspace: "/tmp", gate: g) { lane, _, _, _, _ in runs += 1; return self.ok(lane) }
         XCTAssertTrue(ok.hasSuffix("outcome: completed") && ok.contains("1 approval: valid, consumed"), ok); XCTAssertEqual(runs, 1)
@@ -266,7 +276,7 @@ final class LedgerBridgeTests: XCTestCase {
         let dir = "/tmp/macrix_lb_\(UUID().uuidString)"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let br = writeFakeBridge(dir)
         let cfg = dir + "/ledger.json"; try? "{\"python\":\"\(py)\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\",\"tenant\":\"t\",\"attempt_units\":1000}".write(toFile: cfg, atomically: true, encoding: .utf8)
-        let g = HarnessGate(ledgerPath: dir + "/ledger.jsonl")
+        let g = HarnessGate(ledgerPath: dir + "/ledger.jsonl", ledgerConfig: nil)
         g.ledgerLoad = LedgerBridge.load(path: cfg)
         XCTAssertNotNil(g.ledger, "\(g.ledgerLoad)")
         XCTAssertNil(g.admit(.claude_sonnet, opId: "op-1"))
@@ -280,5 +290,47 @@ final class LedgerBridgeTests: XCTestCase {
         XCTAssertTrue(line.contains("\"cost_status\":\"attempt_units_settled\"") && line.contains("\"ledger\":\"ok\""), line)
         XCTAssertTrue(g.status().contains("ledger: on"))
         try? FileManager.default.removeItem(atPath: dir)
+    }
+}
+
+
+final class ExecutorAndProcessTreeTests: XCTestCase {
+    func testExecuteAppliesProductionPolicyBeforeGate() {
+        let g = HarnessGate(ledgerPath: "/tmp/macrix_exec_\(UUID().uuidString).jsonl", ledgerConfig: nil)
+        if case .failure(let e) = Harness.execute(.muse, prompt: "docker restart api na producao", workspace: "/tmp", opId: "x", gate: g) {
+            XCTAssertTrue(e.message.hasPrefix("blocked_production"), e.message)
+        } else { XCTFail() }
+        XCTAssertNil(g.admit(.muse, opId: "x"))   // nothing was admitted by the refused execute
+        try? FileManager.default.removeItem(atPath: g.statePath)
+    }
+    func testProcessTreeKillsGrandchildren() {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 30 & sleep 30 & wait"]
+        try? p.run(); Thread.sleep(forTimeInterval: 0.5)
+        let kids = Harness.ProcessTree.descendants(of: p.processIdentifier)
+        XCTAssertGreaterThanOrEqual(kids.count, 2, "sh should have two sleep children: \(kids)")
+        let left = Harness.ProcessTree.terminate(root: p.processIdentifier)
+        XCTAssertTrue(left.isEmpty, "survivors: \(left)")
+        XCTAssertFalse(kids.contains { Harness.ProcessTree.alive($0) })
+    }
+}
+
+final class HTTPPolicyTests: XCTestCase {
+    func testContentLengthRejected() {
+        let neg = HTTPRequest.parse(Data("POST /mcp HTTP/1.1\r\nContent-Length: -5\r\n\r\n".utf8))!
+        XCTAssertEqual(neg.method, "BAD")
+        let huge = HTTPRequest.parse(Data("POST /mcp HTTP/1.1\r\nContent-Length: 99999999999\r\n\r\n".utf8))!
+        XCTAssertEqual(huge.method, "BAD")
+        let junk = HTTPRequest.parse(Data("POST /mcp HTTP/1.1\r\nContent-Length: abc\r\n\r\n".utf8))!
+        XCTAssertEqual(junk.method, "BAD")
+        let ok = HTTPRequest.parse(Data("POST /mcp HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}".utf8))!
+        XCTAssertEqual(ok.method, "POST"); XCTAssertEqual(ok.body.count, 2)
+    }
+    func testPublicSurfaceAndOrigin() {
+        XCTAssertTrue(HTTPPolicy.isPublic(headers: ["cf-ray": "abc"])); XCTAssertFalse(HTTPPolicy.isPublic(headers: ["host": "127.0.0.1:35730"]))
+        XCTAssertTrue(HTTPPolicy.publicTool("catalog_search")); XCTAssertTrue(HTTPPolicy.publicTool("jev_ping")); XCTAssertTrue(HTTPPolicy.publicTool("agents_gate"))
+        for t in ["agent_run", "journey_run", "journey_approve", "voice_listen", "file_read", "cu_click", "app_quit", "notify"] { XCTAssertFalse(HTTPPolicy.publicTool(t), t) }
+        XCTAssertTrue(HTTPPolicy.originAllowed("http://127.0.0.1:35730", port: 35730)); XCTAssertTrue(HTTPPolicy.originAllowed("https://macrix.triqhub.tech", port: 35730))
+        XCTAssertFalse(HTTPPolicy.originAllowed("https://evil.example", port: 35730)); XCTAssertFalse(HTTPPolicy.originAllowed("null", port: 35730))
     }
 }

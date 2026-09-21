@@ -22,7 +22,9 @@ public final class HTTPServer: @unchecked Sendable {
         self.keys = keys
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        self.listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+        // Explicit loopback bind: the only way in from outside is the Cloudflare tunnel.
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!)
+        self.listener = try NWListener(using: params)
     }
 
     public func start() {
@@ -51,6 +53,13 @@ public final class HTTPServer: @unchecked Sendable {
         guard let raw = await recvRequest(on: connection),
               let req = HTTPRequest.parse(raw) else { return }
         bump()
+        if req.method == "BAD" {
+            send(connection: connection, status: "400 Bad Request", headers: [:], body: Data("invalid Content-Length".utf8)); return
+        }
+        if let origin = req.headers["origin"], !HTTPPolicy.originAllowed(origin, port: port) {
+            send(connection: connection, status: "403 Forbidden", headers: [:], body: Data("origin not allowed".utf8)); return
+        }
+        let isPublic = HTTPPolicy.isPublic(headers: req.headers)
         if req.method == "GET", req.path == "/health" {
             let body = "{\"status\":\"ok\",\"server\":\"\(mcpServerName)\",\"version\":\"\(mcpServerVersion)\",\"requests\":\(totalRequests),\"tier\":\"\(License.current().tier.rawValue)\"}"
             send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
@@ -69,6 +78,7 @@ public final class HTTPServer: @unchecked Sendable {
             return
         }
         if req.method == "GET", req.path == "/usage" {
+            if isPublic { send(connection: connection, status: "404 Not Found", headers: [:], body: Data()); return }
             guard let token = Auth.token(from: req.headers["authorization"]), keys.contains(token) else {
                 send(connection: connection, status: "401 Unauthorized", headers: [:], body: Data())
                 return
@@ -99,6 +109,11 @@ public final class HTTPServer: @unchecked Sendable {
         let tier = License.current().tier
         if case .object(let o) = rpc, o["method"]?.string == "tools/call" {
             let tname = o["params"]?["name"]?.string ?? "?"
+            if isPublic, !HTTPPolicy.publicTool(tname) {
+                let err = try! JSONEncoder().encode(jsonError(code: -32001, message: "tool \(tname) is not available on the public surface (showcase only); use the local endpoint", id: o["id"]))
+                send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: err)
+                return
+            }
             if let over = Usage.admit(keyFP: fp, tool: tname, tier: tier) {
                 let err = try! JSONEncoder().encode(jsonError(code: -32000, message: over, id: o["id"]))
                 send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: err)
@@ -181,7 +196,11 @@ struct HTTPRequest {
             let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
             headers[name] = value
         }
-        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
+        let clRaw = headers["content-length"] ?? "0"
+        guard let contentLength = Int(clRaw), contentLength >= 0, contentLength <= HTTPPolicy.maxBody else {
+            // reject before any range arithmetic; the handler answers 400
+            return HTTPRequest(method: "BAD", path: "/", headers: headers, body: Data(), totalLength: headerEnd + 4)
+        }
         let total = headerEnd + 4 + contentLength
         guard data.count >= total else { return nil }
         let body = data.subdata(in: (headerEnd + 4)..<(headerEnd + 4 + contentLength))
@@ -199,5 +218,22 @@ struct HTTPRequest {
             }
         }
         return nil
+    }
+}
+
+
+/// Policy for the exposed server. Public = arrived through the Cloudflare tunnel
+/// (cloudflared adds cf-connecting-ip / cf-ray). The public surface is a showcase:
+/// health, console, catalog and a read-only tool allowlist. Operational tools
+/// (agents, journeys, voice, files, computer-use, writers) need the local endpoint.
+public enum HTTPPolicy {
+    public static let maxBody = 1 << 20
+    public static let publicPrefixes = ["catalog_", "jev_", "agents_list", "agents_gate", "usage_status", "time_now", "meta_", "health"]
+    public static func isPublic(headers: [String: String]) -> Bool { headers["cf-connecting-ip"] != nil || headers["cf-ray"] != nil }
+    public static func publicTool(_ name: String) -> Bool { publicPrefixes.contains { name.hasPrefix($0) } }
+    public static func originAllowed(_ origin: String, port: UInt16) -> Bool {
+        let o = origin.lowercased().trimmingCharacters(in: .whitespaces)
+        if o == "null" { return false }
+        return o == "http://127.0.0.1:\(port)" || o == "http://localhost:\(port)" || o == "https://macrix.triqhub.tech" || o == "https://macrix.triqhub.cloud"
     }
 }

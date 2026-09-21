@@ -1034,29 +1034,20 @@ func registerHarnessTools(into registry: ToolRegistry) {
             return textContent("unknown agent; one of: " + Harness.Agent.allCases.map { $0.rawValue }.joined(separator: ", "), isError: true)
         }
         let opId = args["op_id"]?.string
-        if let refusal = HarnessGate.shared.admit(a, opId: opId) {
-            switch refusal {
-            case .busy(let n): return textContent("busy: \(n) agent runs in flight (max \(HarnessGate.shared.maxConcurrent)); retry later.", isError: true)
-            case .duplicate(let id): return textContent("duplicate op_id \(id): already ran within the dedupe window; not running twice.", isError: true)
-            case .suspended(let lane, let until): return textContent("\(lane.rawValue) suspended after a quota answer until \(ISO8601DateFormatter().string(from: until)).", isError: true)
-            case .frozen(let why): return textContent("ledger refused the attempt (\(why)); account needs review.", isError: true)
-            }
-        }
-        let r = Harness.run(a, prompt: args["prompt"]?.string ?? "", workspace: args["workspace"]?.string ?? "",
-                            model: args["model"]?.string, yolo: (args["yolo"]?.string ?? "false") == "true",
-                            timeout: Double(args["timeout"]?.string ?? "") ?? 300)
-        let status = HarnessGate.shared.settle(a, opId: opId, result: r)
+        let r = Harness.execute(a, prompt: args["prompt"]?.string ?? "", workspace: args["workspace"]?.string ?? "",
+                                model: args["model"]?.string, yolo: (args["yolo"]?.string ?? "false") == "true",
+                                timeout: Double(args["timeout"]?.string ?? "") ?? 300, opId: opId)
         switch r {
         case .failure(let e): return textContent(e.message, isError: true)
-        case .success(let ok):
+        case .success(let (ok, status)):
             let shown = ok.argv.map { $0 == (args["prompt"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) ? "<prompt>" : $0 }.joined(separator: " ")
-            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · execution \(status) · cost unknown\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
+            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · execution \(status) · cost \(status == "settled" ? "see ledger" : "unknown")\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
         }
     })
     registry.register(Tool(
         name: "agent_route",
-        description: "Ask Jev which lane a task deserves (hardest→claude_fable, medium→claude_opus, simple→claude_sonnet, bulk→muse) plus needs_review. args: task, available? (comma list), execute? (\"true\" runs it via agent_run), workspace?, yolo?.",
-        inputSchema: objSchema(["task": "string", "available": "string", "execute": "string", "workspace": "string", "yolo": "string"], required: ["task"])) { args async in
+        description: "Ask Jev which lane a task deserves (hardest→claude_fable, medium→claude_opus, simple→claude_sonnet, bulk→muse) plus needs_review. args: task, available? (comma list), execute? (\"true\" runs it through the same gated executor as agent_run; needs_review ≥ 0.70 is never auto-executed), workspace?, yolo?, op_id?.",
+        inputSchema: objSchema(["task": "string", "available": "string", "execute": "string", "workspace": "string", "yolo": "string", "op_id": "string"], required: ["task"])) { args async in
         guard let key = Voice.apiKey() else { return textContent("jev unavailable: TYPESAFE_API_KEY missing.", isError: true) }
         var avail = Harness.Agent.allCases.filter { Harness.resolve($0) != nil }
         if let list = args["available"]?.string, !list.isEmpty {
@@ -1069,9 +1060,12 @@ func registerHarnessTools(into registry: ToolRegistry) {
         case .success(let r):
             var text = Harness.routeText(r)
             if (args["execute"]?.string ?? "false") == "true" {
-                switch Harness.run(r.lane, prompt: task, workspace: args["workspace"]?.string ?? "", yolo: (args["yolo"]?.string ?? "false") == "true") {
-                case .failure(let e): text += "\nrun: \(e.message)"
-                case .success(let ok): text += "\nrun: exit \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s\n---\n\(ok.output)"
+                if r.review >= 0.70 { text += "\nrun: needs_review \(String(format: "%.2f", r.review)) ≥ 0.70 → not executed; use journey_run for the approval path" }
+                else {
+                    switch Harness.execute(r.lane, prompt: task, workspace: args["workspace"]?.string ?? "", yolo: (args["yolo"]?.string ?? "false") == "true", opId: args["op_id"]?.string) {
+                    case .failure(let e): text += "\nrun: \(e.message)"
+                    case .success(let (ok, status)): text += "\nrun: exit \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · execution \(status)\n---\n\(ok.output)"
+                    }
                 }
             }
             return textContent(text)
@@ -1090,7 +1084,7 @@ func registerHarnessTools(into registry: ToolRegistry) {
     })
     registry.register(Tool(
         name: "journey_approve",
-        description: "Execute a journey that stopped in needs_human_review: needs the journey_id, the single-use token printed by journey_run, and the exact same task text. Production markers stay blocked even with a token. args: journey_id, token, task, workspace?, yolo?, timeout?.",
+        description: "Execute a journey that stopped in needs_human_review: needs the journey_id, the single-use token that journey_run wrote to ~/.config/macrix/approvals/<id>.approval on this Mac (never returned over MCP), and the same task/workspace/yolo/timeout. Production markers stay blocked even with a token. args: journey_id, token, task, workspace?, yolo?, timeout?.",
         inputSchema: objSchema(["journey_id": "string", "token": "string", "task": "string", "workspace": "string", "yolo": "string", "timeout": "string"], required: ["journey_id", "token", "task"])) { args async in
         textContent(Journey.approve(journeyId: args["journey_id"]?.string ?? "", token: args["token"]?.string ?? "", task: args["task"]?.string ?? "",
                                     workspace: args["workspace"]?.string ?? "", gate: HarnessGate.shared, yolo: (args["yolo"]?.string ?? "false") == "true",
