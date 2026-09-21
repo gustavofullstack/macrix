@@ -50,7 +50,7 @@ public final class HTTPServer: @unchecked Sendable {
               let req = HTTPRequest.parse(raw) else { return }
         bump()
         if req.method == "GET", req.path == "/health" {
-            let body = "{\"status\":\"ok\",\"server\":\"\(mcpServerName)\",\"version\":\"\(mcpServerVersion)\",\"requests\":\(totalRequests)}"
+            let body = "{\"status\":\"ok\",\"server\":\"\(mcpServerName)\",\"version\":\"\(mcpServerVersion)\",\"requests\":\(totalRequests),\"tier\":\"\(License.current().tier.rawValue)\"}"
             send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
             return
         }
@@ -58,9 +58,9 @@ public final class HTTPServer: @unchecked Sendable {
             send(connection: connection, status: "404 Not Found", headers: [:], body: Data())
             return
         }
-        guard Auth.isAuthorized(headerValue: req.headers["authorization"], keys: keys) else {
+        guard let token = Auth.token(from: req.headers["authorization"]), keys.contains(token) else {
             send(connection: connection, status: "401 Unauthorized",
-                 headers: ["WWW-Authenticate": "Bearer realm=\"macuse-open\", scope=\"mcp:*\""],
+                 headers: ["WWW-Authenticate": "Bearer realm=\"macrix\", scope=\"mcp:*\""],
                  body: Data())
             return
         }
@@ -71,6 +71,27 @@ public final class HTTPServer: @unchecked Sendable {
             return
         }
         let sessionID = UUID().uuidString
+        let fp = License.fingerprint(token)
+        let tier = License.current().tier
+        if case .object(let o) = rpc, o["method"]?.string == "tools/call" {
+            let tname = o["params"]?["name"]?.string ?? "?"
+            if let over = Usage.check(keyFP: fp, tool: tname, tier: tier) {
+                let err = try! JSONEncoder().encode(jsonError(code: -32000, message: over, id: o["id"]))
+                send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: err)
+                return
+            }
+            if let resp = await MCPDispatcher.handle(request: rpc, registry: registry) {
+                Usage.record(keyFP: fp, tool: tname)
+                let data = (try? JSONEncoder().encode(resp)) ?? Data()
+                send(connection: connection, status: "200 OK",
+                     headers: ["Content-Type": "application/json", "Mcp-Session-Id": sessionID],
+                     body: data)
+            } else {
+                send(connection: connection, status: "202 Accepted",
+                     headers: ["Mcp-Session-Id": sessionID], body: Data())
+            }
+            return
+        }
         if let resp = await MCPDispatcher.handle(request: rpc, registry: registry) {
             let data = (try? JSONEncoder().encode(resp)) ?? Data()
             send(connection: connection, status: "200 OK",

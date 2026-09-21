@@ -1,7 +1,7 @@
 import Foundation
 
-public let mcpServerName = "macuse-open"
-public let mcpServerVersion = "0.2.0"
+public let mcpServerName = "macrix"
+public let mcpServerVersion = "0.3.0"
 
 public struct Tool: Sendable {
     public let name: String
@@ -56,7 +56,7 @@ public enum MCPDispatcher {
                 "protocolVersion": .string("2025-06-18"),
                 "capabilities": .object(["tools": .object(["listChanged": .bool(false)])]),
                 "serverInfo": .object(["name": .string(mcpServerName),
-                                       "title": .string("macuse-open MCP server"),
+                                       "title": .string("macrix MCP server"),
                                        "version": .string(mcpServerVersion)]),
             ]), id: id)
         case "notifications/initialized":

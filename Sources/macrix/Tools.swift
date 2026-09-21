@@ -309,10 +309,10 @@ public func registerAllTools(into registry: ToolRegistry) {
 
     registry.register(Tool(
         name: "jev_rerank",
-        description: "Rerank candidate passages with the local Jev/TypeSafe model. Enabled only with MACUSE_OPEN_JEV=1.",
+        description: "Rerank candidate passages with the local Jev/TypeSafe model. Enabled only with MACRIX_JEV=1.",
         inputSchema: objSchema(["query": "string", "candidates": "string"], required: ["query", "candidates"])) { args async in
-        guard ProcessInfo.processInfo.environment["MACUSE_OPEN_JEV"] == "1" else {
-            return textContent("jev hook disabled: set MACUSE_OPEN_JEV=1 to enable.", isError: true)
+        guard ProcessInfo.processInfo.environment["MACRIX_JEV"] == "1" else {
+            return textContent("jev hook disabled: set MACRIX_JEV=1 to enable.", isError: true)
         }
         guard let q = args["query"]?.string, let cands = args["candidates"]?.string else {
             return textContent("missing query or candidates.", isError: true)
@@ -359,5 +359,85 @@ public func registerAllTools(into registry: ToolRegistry) {
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
         return textContent("screenshot: \(path) (\(size) bytes)")
+    })
+
+    // MARK: - v0.3 computer-use + usage
+    registry.register(Tool(
+        name: "cu_click",
+        description: "Click at screen coordinates (left or right). Needs Accessibility permission.",
+        inputSchema: objSchema(["x": "number", "y": "number", "right": "number"], required: ["x", "y"])) { args async in
+        guard let x = args["x"]?.double, let y = args["y"]?.double else {
+            return textContent("missing x/y.", isError: true)
+        }
+        return CU.click(x: x, y: y, right: (args["right"]?.int ?? 0) == 1)
+            ? textContent("clicked (\(Int(x)), \(Int(y)))")
+            : textContent(CU.deniedText, isError: true)
+    })
+    registry.register(Tool(
+        name: "cu_type",
+        description: "Type text into the focused app. Needs Accessibility permission.",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        guard let t = args["text"]?.string, !t.isEmpty else {
+            return textContent("missing text.", isError: true)
+        }
+        return CU.typeText(t) ? textContent("typed \(t.count) chars") : textContent(CU.deniedText, isError: true)
+    })
+    registry.register(Tool(
+        name: "cu_key",
+        description: "Press a key (return/tab/escape/space/delete/arrows) with optional modifiers cmd/ctrl/opt/shift.",
+        inputSchema: objSchema(["key": "string", "modifiers": "string"], required: ["key"])) { args async in
+        guard let k = args["key"]?.string else { return textContent("missing key.", isError: true) }
+        let mods = (args["modifiers"]?.string ?? "").split(separator: ",").map { String($0) }
+        guard CU.keycodes[k.lowercased()] != nil else {
+            return textContent("unknown key '\(k)'.", isError: true)
+        }
+        return CU.key(k, modifiers: mods) ? textContent("pressed \(k)") : textContent(CU.deniedText, isError: true)
+    })
+    registry.register(Tool(
+        name: "cu_scroll",
+        description: "Scroll wheel at coordinates (dy positive = down).",
+        inputSchema: objSchema(["x": "number", "y": "number", "dy": "number", "dx": "number"], required: ["x", "y", "dy"])) { args async in
+        guard let x = args["x"]?.double, let y = args["y"]?.double, let dy = args["dy"]?.int else {
+            return textContent("missing x/y/dy.", isError: true)
+        }
+        return CU.scroll(x: x, y: y, dy: Int32(dy), dx: Int32(args["dx"]?.int ?? 0))
+            ? textContent("scrolled") : textContent(CU.deniedText, isError: true)
+    })
+    registry.register(Tool(
+        name: "cu_windows",
+        description: "List on-screen windows (owner, pid, title). No permission needed.",
+        inputSchema: objSchema([:])) { _ async in textContent(CU.windows()) })
+    registry.register(Tool(
+        name: "cu_front_app",
+        description: "Frontmost application (name, bundle, pid). No permission needed.",
+        inputSchema: objSchema([:])) { _ async in textContent(CU.frontApp()) })
+    registry.register(Tool(
+        name: "cu_ax_query",
+        description: "Bounded Accessibility tree of the focused app (role + title, depth<=3, 100 nodes).",
+        inputSchema: objSchema([:])) { _ async in textContent(CU.axQuery()) })
+    registry.register(Tool(
+        name: "cu_shot",
+        description: "Screenshot a screen region to PNG (x,y,w,h). Needs Screen Recording permission.",
+        inputSchema: objSchema(["x": "number", "y": "number", "w": "number", "h": "number"],
+                               required: ["x", "y", "w", "h"])) { args async in
+        guard let x = args["x"]?.int, let y = args["y"]?.int,
+              let w = args["w"]?.int, let h = args["h"]?.int else {
+            return textContent("missing x/y/w/h.", isError: true)
+        }
+        let path = "/tmp/macrix_cap_\(Int(Date().timeIntervalSince1970)).png"
+        let (code, _) = runProcess("/usr/sbin/screencapture", ["-x", "-t", "png", "-R", "\(x),\(y),\(w),\(h)", path], timeoutSeconds: 30)
+        guard code == 0, FileManager.default.fileExists(atPath: path) else {
+            return textContent("screen capture unavailable: grant Screen Recording in System Settings > Privacy & Security, then retry.", isError: true)
+        }
+        return textContent("screenshot: \(path)")
+    })
+    registry.register(Tool(
+        name: "usage_status",
+        description: "Today's metered usage for the calling key: tier, calls vs quota, top tools.",
+        inputSchema: objSchema([:])) { _ async in
+        // NOTE: key identity is not threaded into tool args in v0.3;
+        // the server stamps usage per key, and this reports the global tier.
+        // Per-key self-report lands in v0.4.
+        textContent("tier \(License.current().tier.rawValue) — per-key detail via server log; quotas: free 1000/day/key, pro/lifetime unlimited.")
     })
 }

@@ -1,5 +1,5 @@
 import XCTest
-@testable import macuse_open
+@testable import macrix
 
 final class AuthTests: XCTestCase {
     func testTokenExtraction() {

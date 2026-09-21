@@ -1,5 +1,5 @@
 import XCTest
-@testable import macuse_open
+@testable import macrix
 
 final class DispatcherTests: XCTestCase {
     func makeRegistry() -> ToolRegistry {
@@ -11,7 +11,7 @@ final class DispatcherTests: XCTestCase {
         let req: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
                                       "method": .string("initialize"), "params": .object([:])])
         let resp = await MCPDispatcher.handle(request: req, registry: makeRegistry())
-        XCTAssertEqual(resp?["result"]?["serverInfo"]?["name"]?.string, "macuse-open")
+        XCTAssertEqual(resp?["result"]?["serverInfo"]?["name"]?.string, "macrix")
     }
     func testToolsListContainsCore() async {
         let req: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(2),
@@ -23,7 +23,9 @@ final class DispatcherTests: XCTestCase {
         let names = Set(tools.compactMap { $0["name"]?.string })
         for want in ["health", "calendar_search_events", "reminders_search",
                      "notes_search_notes", "shortcuts_list", "shortcuts_run", "jev_rerank",
-                     "mail_search", "messages_search", "contacts_search", "screen_capture"] {
+                     "mail_search", "messages_search", "contacts_search", "screen_capture",
+                     "cu_click", "cu_type", "cu_key", "cu_scroll", "cu_windows",
+                     "cu_front_app", "cu_ax_query", "cu_shot", "usage_status"] {
             XCTAssertTrue(names.contains(want), "missing \(want)")
         }
     }

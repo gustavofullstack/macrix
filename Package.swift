@@ -2,20 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "macuse-open",
+    name: "macrix",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "macuse-open", targets: ["macuse-open"]),
+        .executable(name: "macrix", targets: ["macrix"]),
     ],
     targets: [
         .executableTarget(
-            name: "macuse-open",
-            path: "Sources/macuse-open"
+            name: "macrix",
+            path: "Sources/macrix"
         ),
         .testTarget(
-            name: "macuse-openTests",
-            dependencies: ["macuse-open"],
-            path: "Tests/macuse-openTests"
+            name: "macrixTests",
+            dependencies: ["macrix"],
+            path: "Tests/macrixTests"
         ),
     ]
 )

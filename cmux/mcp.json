@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "macuse-open": {
+    "macrix": {
       "type": "streamable-http",
       "url": "http://127.0.0.1:35730/mcp",
       "headers": {
-        "Authorization": "Bearer ${MACUSE_OPEN_KEY}"
+        "Authorization": "Bearer ${MACRIX_KEY}"
       },
       "mode": "optional"
     }
