@@ -721,4 +721,28 @@ public func registerAllTools(into registry: ToolRegistry) {
         let (code, out) = Jev.runShell(Jev.helper(), args: ["citation-check", c, e], timeoutSeconds: 60)
         return code == 0 ? textContent(out.trimmingCharacters(in: .whitespacesAndNewlines)) : textContent("citation-check failed.", isError: true)
     })
+
+    // MARK: - v0.16 web fetch/download + clip read + open (G1)
+    registry.register(Tool(
+        name: "url_fetch",
+        description: "GET an http(s) URL, returns body text (1MB cap).",
+        inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
+        textContent(WebClip.fetch(args["url"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "url_download",
+        description: "Download an http(s) URL into ~/Downloads. Returns saved path.",
+        inputSchema: objSchema(["url": "string", "name": "string"], required: ["url"])) { args async in
+        textContent(WebClip.download(args["url"]?.string ?? "", name: args["name"]?.string))
+    })
+    registry.register(Tool(
+        name: "clip_get",
+        description: "Read the macOS pasteboard as text.",
+        inputSchema: objSchema([:])) { _ async in textContent(WebClip.clipGet()) })
+    registry.register(Tool(
+        name: "open_url",
+        description: "Open an http(s) URL in the default browser.",
+        inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
+        textContent(WebClip.open(args["url"]?.string ?? ""))
+    })
 }
