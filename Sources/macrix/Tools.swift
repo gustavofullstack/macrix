@@ -492,4 +492,87 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["target": "string"], required: ["target"])) { args async in
         textContent(Sys.openTarget(args["target"]?.string ?? ""))
     })
+
+    // MARK: - v0.9 writers (G1): calendar + reminders CRUD
+    registry.register(Tool(
+        name: "calendar_create_event",
+        description: "Create a calendar event (title, ISO-8601 start/end, optional notes). Returns the event identifier.",
+        inputSchema: objSchema(["title": "string", "start": "string", "end": "string", "notes": "string"],
+                               required: ["title", "start", "end"])) { args async in
+        guard let store = await EKAccess.eventStore() else { return textContent(permissionDeniedText, isError: true) }
+        guard let title = args["title"]?.string, !title.isEmpty,
+              let startS = args["start"]?.string, let endS = args["end"]?.string,
+              let start = iso.date(from: startS), let end = iso.date(from: endS), end > start else {
+            return textContent("invalid title/start/end (ISO-8601, end > start).", isError: true)
+        }
+        let ev = EKEvent(eventStore: store)
+        ev.title = title; ev.startDate = start; ev.endDate = end
+        ev.calendar = store.defaultCalendarForNewEvents
+        if let n = args["notes"]?.string { ev.notes = n }
+        do {
+            try store.save(ev, span: .thisEvent)
+            return textContent("created event \(ev.eventIdentifier ?? "?")")
+        } catch {
+            return textContent("create failed: \(error.localizedDescription)", isError: true)
+        }
+    })
+    registry.register(Tool(
+        name: "calendar_delete_event",
+        description: "Delete a calendar event by identifier (from calendar_search_events or create).",
+        inputSchema: objSchema(["id": "string"], required: ["id"])) { args async in
+        guard let store = await EKAccess.eventStore() else { return textContent(permissionDeniedText, isError: true) }
+        guard let ident = args["id"]?.string,
+              let ev = store.event(withIdentifier: ident) else {
+            return textContent("event not found.", isError: true)
+        }
+        do {
+            try store.remove(ev, span: .thisEvent)
+            return textContent("deleted \(ident)")
+        } catch {
+            return textContent("delete failed: \(error.localizedDescription)", isError: true)
+        }
+    })
+    registry.register(Tool(
+        name: "reminders_create",
+        description: "Create a reminder (title, optional ISO-8601 due, optional list name). Returns the identifier.",
+        inputSchema: objSchema(["title": "string", "due": "string", "list": "string"],
+                               required: ["title"])) { args async in
+        guard let store = await EKAccess.reminderStore() else { return textContent(permissionDeniedText, isError: true) }
+        guard let title = args["title"]?.string, !title.isEmpty else {
+            return textContent("missing title.", isError: true)
+        }
+        let rem = EKReminder(eventStore: store)
+        rem.title = title
+        rem.calendar = store.defaultCalendarForNewReminders()
+        if let dueS = args["due"]?.string, let due = iso.date(from: dueS) {
+            rem.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
+        }
+        if let listName = args["list"]?.string,
+           let cal = store.calendars(for: .reminder).first(where: { $0.title == listName }) {
+            rem.calendar = cal
+        }
+        do {
+            try store.save(rem, commit: true)
+            return textContent("created reminder \(rem.calendarItemIdentifier)")
+        } catch {
+            return textContent("create failed: \(error.localizedDescription)", isError: true)
+        }
+    })
+    registry.register(Tool(
+        name: "reminders_complete",
+        description: "Mark a reminder completed by identifier.",
+        inputSchema: objSchema(["id": "string"], required: ["id"])) { args async in
+        guard let store = await EKAccess.reminderStore() else { return textContent(permissionDeniedText, isError: true) }
+        guard let ident = args["id"]?.string,
+              let rem = store.calendarItem(withIdentifier: ident) as? EKReminder else {
+            return textContent("reminder not found.", isError: true)
+        }
+        rem.isCompleted = true
+        do {
+            try store.save(rem, commit: true)
+            return textContent("completed \(ident)")
+        } catch {
+            return textContent("complete failed: \(error.localizedDescription)", isError: true)
+        }
+    })
 }
