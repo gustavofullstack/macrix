@@ -778,4 +778,40 @@ public func registerAllTools(into registry: ToolRegistry) {
         }.filter { !$0.isEmpty }
         return textContent(Clock.world(zs))
     })
+
+    // MARK: - v0.18 codec family (G1)
+    registry.register(Tool(
+        name: "b64_encode",
+        description: "Base64-encode text (100KB cap).",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Codec.b64encode(args["text"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "b64_decode",
+        description: "Base64-decode to text.",
+        inputSchema: objSchema(["base64": "string"], required: ["base64"])) { args async in
+        textContent(Codec.b64decode(args["base64"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "sha256",
+        description: "SHA-256 hex of text.",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Codec.sha256(args["text"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "uuid_gen",
+        description: "Random lowercase UUID v4.",
+        inputSchema: objSchema([:])) { _ async in textContent(Codec.uuid()) })
+    registry.register(Tool(
+        name: "json_pretty",
+        description: "Pretty-print JSON (sorted keys).",
+        inputSchema: objSchema(["json": "string"], required: ["json"])) { args async in
+        textContent(Codec.jsonPretty(args["json"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "qr_png",
+        description: "Render text/URL as QR PNG in /tmp. Returns the path.",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Codec.qr(args["text"]?.string ?? ""))
+    })
 }
