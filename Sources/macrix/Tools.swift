@@ -575,4 +575,24 @@ public func registerAllTools(into registry: ToolRegistry) {
             return textContent("complete failed: \(error.localizedDescription)", isError: true)
         }
     })
+
+    // MARK: - v0.10 web family (G5): headless Chromium
+    registry.register(Tool(
+        name: "web_shot",
+        description: "Screenshot an http(s) page with headless Chromium. Returns the PNG path.",
+        inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
+        textContent(Web.shot(url: args["url"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "web_text",
+        description: "Rendered text of an http(s) page (JS executed, tags stripped, 4000 chars).",
+        inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
+        textContent(Web.text(url: args["url"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "web_pdf",
+        description: "Print an http(s) page to PDF. Returns the file path.",
+        inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
+        textContent(Web.pdf(url: args["url"]?.string ?? ""))
+    })
 }

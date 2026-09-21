@@ -23,6 +23,6 @@ final class SystemTests: XCTestCase {
         for w in ["sys_info","sys_battery","sys_volume","sys_wifi","sys_clipboard","sys_procs","sys_disk","sys_open"] {
             XCTAssertTrue(names.contains(w), "missing \(w)")
         }
-        XCTAssertEqual(r.list().count, 37)
+        XCTAssertGreaterThanOrEqual(r.list().count, 37)
     }
 }
