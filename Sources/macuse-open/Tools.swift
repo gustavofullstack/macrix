@@ -1,5 +1,6 @@
 import Foundation
 import EventKit
+import Contacts
 
 private let iso: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
@@ -134,6 +135,78 @@ enum NotesDB {
     }
 }
 
+
+// MARK: - v0.2: Mail, Messages, Contacts, Screen
+
+enum MailSearch {
+    static func search(query: String, limit: Int) -> String {
+        let q = query.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let n = max(1, min(limit, 20))
+        let script = """
+        tell application "Mail"
+        set out to {}
+        repeat with m in (messages of inbox whose subject contains "\(q)")
+        set end of out to (subject of m) & " | " & (sender of m)
+        if (count of out) >= \(n) then exit repeat
+        end repeat
+        return out
+        end tell
+        """
+        let (code, text) = runProcess("/usr/bin/osascript", ["-e", script], timeoutSeconds: 60)
+        if code != 0 {
+            return "mail unavailable: is Mail.app installed and Automation allowed for this binary? (exit \(code))"
+        }
+        let lines = text.components(separatedBy: ", ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return lines.isEmpty ? "no mail matches '\(query)'." : lines.joined(separator: "\n")
+    }
+}
+
+enum MessagesDB {
+    static var dbPath: String? {
+        let p = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Messages/chat.db")
+        return FileManager.default.isReadableFile(atPath: p) ? p : nil
+    }
+
+    static func search(query: String, limit: Int) -> String {
+        guard let db = dbPath else {
+            return "messages unavailable: chat.db not readable (grant Full Disk Access and retry)."
+        }
+        let ql = query.replacingOccurrences(of: "'", with: "''")
+        let n = max(1, min(limit, 30))
+        let sql = "SELECT COALESCE(h.id,'?'), substr(m.text,1,200) FROM message m " +
+            "LEFT JOIN handle h ON m.handle_id=h.ROWID " +
+            "WHERE m.text LIKE '%\(ql)%' ORDER BY m.date DESC LIMIT \(n);"
+        let (code, out) = runProcess("/usr/bin/sqlite3", ["-readonly", "-separator", "\t", db, sql])
+        guard code == 0 else { return "messages unavailable: search failed." }
+        let lines = out.components(separatedBy: "\n").compactMap { line -> String? in
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 2, !parts[1].isEmpty else { return nil }
+            return "- [\(parts[0])] \(parts[1])"
+        }
+        return lines.isEmpty ? "no messages match '\(query)'." : lines.joined(separator: "\n")
+    }
+}
+
+enum ContactsSearch {
+    static func search(query: String, limit: Int) -> String {
+        let store = CNContactStore()
+        let keys = [CNContactGivenNameKey, CNContactFamilyNameKey,
+                    CNContactPhoneNumbersKey, CNContactEmailAddressesKey] as [CNKeyDescriptor]
+        do {
+            let found = try store.unifiedContacts(matching: CNContact.predicateForContacts(matchingName: query), keysToFetch: keys)
+            let lines = found.prefix(max(1, min(limit, 30))).map { c -> String in
+                let phones = c.phoneNumbers.map { $0.value.stringValue }.joined(separator: ", ")
+                let mails = c.emailAddresses.map { String($0.value) }.joined(separator: ", ")
+                return "- \(c.givenName) \(c.familyName) | tel: \(phones) | mail: \(mails)"
+            }
+            return lines.isEmpty ? "no contacts match '\(query)'." : lines.joined(separator: "\n")
+        } catch {
+            return "contacts unavailable: grant Contacts access in System Settings > Privacy & Security, then retry."
+        }
+    }
+}
+
 // MARK: - Registration
 
 public func registerAllTools(into registry: ToolRegistry) {
@@ -141,7 +214,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. tools: calendar_list_calendars, calendar_search_events, reminders_search, notes_search_notes, shortcuts_list, shortcuts_run, jev_rerank. no daily limits, concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. tools: health, calendar_list_calendars, calendar_search_events, reminders_search, notes_search_notes, shortcuts_list, shortcuts_run, jev_rerank, mail_search, messages_search, contacts_search, screen_capture. no daily limits, concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -252,5 +325,39 @@ public func registerAllTools(into registry: ToolRegistry) {
             lines.append(code == 0 ? out.trimmingCharacters(in: .whitespacesAndNewlines) : "rerank failed for candidate")
         }
         return textContent(lines.joined(separator: "\n"))
+    })
+
+    registry.register(Tool(
+        name: "mail_search",
+        description: "Search Mail.app inbox subjects (read-only).",
+        inputSchema: objSchema(["query": "string", "limit": "number"], required: ["query"])) { args async in
+        textContent(MailSearch.search(query: args["query"]?.string ?? "", limit: args["limit"]?.int ?? 20))
+    })
+
+    registry.register(Tool(
+        name: "messages_search",
+        description: "Search Messages.app texts by substring (read-only).",
+        inputSchema: objSchema(["query": "string", "limit": "number"], required: ["query"])) { args async in
+        textContent(MessagesDB.search(query: args["query"]?.string ?? "", limit: args["limit"]?.int ?? 30))
+    })
+
+    registry.register(Tool(
+        name: "contacts_search",
+        description: "Search Contacts by name (phones + emails).",
+        inputSchema: objSchema(["query": "string", "limit": "number"], required: ["query"])) { args async in
+        textContent(ContactsSearch.search(query: args["query"]?.string ?? "", limit: args["limit"]?.int ?? 20))
+    })
+
+    registry.register(Tool(
+        name: "screen_capture",
+        description: "Capture the main display to a PNG file (needs Screen Recording permission). Returns the file path.",
+        inputSchema: objSchema([:])) { _ async in
+        let path = "/tmp/mo_cap_\(Int(Date().timeIntervalSince1970)).png"
+        let (code, _) = runProcess("/usr/sbin/screencapture", ["-x", "-t", "png", path], timeoutSeconds: 30)
+        guard code == 0, FileManager.default.fileExists(atPath: path) else {
+            return textContent("screen capture unavailable: grant Screen Recording in System Settings > Privacy & Security, then retry.", isError: true)
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        return textContent("screenshot: \(path) (\(size) bytes)")
     })
 }

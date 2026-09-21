@@ -1,7 +1,7 @@
 import Foundation
 
 public let mcpServerName = "macuse-open"
-public let mcpServerVersion = "0.1.0"
+public let mcpServerVersion = "0.2.0"
 
 public struct Tool: Sendable {
     public let name: String

@@ -37,7 +37,7 @@ macuse-open version
 
 Endpoints: `POST /mcp` (Bearer obrigatório), `GET /health` (aberto).
 
-## Tools (v0.1 — 8)
+## Tools (v0.2 — 12)
 
 | Tool | O que faz |
 |---|---|
@@ -48,6 +48,10 @@ Endpoints: `POST /mcp` (Bearer obrigatório), `GET /health` (aberto).
 | `notes_search_notes` | Notas.app, leitura direta só-leitura do SQLite |
 | `shortcuts_list` / `shortcuts_run` | Atalhos do macOS |
 | `jev_rerank` | re-ranqueia passagens com o Jev local (só com `MACUSE_OPEN_JEV=1`) |
+| `mail_search` | assuntos da caixa de entrada do Mail (só leitura) |
+| `messages_search` | textos do Messages por substring (só leitura) |
+| `contacts_search` | contatos por nome (telefones + e-mails) |
+| `screen_capture` | screenshot da tela principal (retorna o caminho do PNG) |
 
 Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Access.
 Sem permissão, a tool devolve erro estruturado — nunca quebra a sessão.
