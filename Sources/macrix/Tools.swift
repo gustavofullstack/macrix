@@ -690,4 +690,35 @@ public func registerAllTools(into registry: ToolRegistry) {
         }
         return CU.click(x: pt.x, y: pt.y) ? textContent("clicked element at (\(Int(pt.x)), \(Int(pt.y)))") : textContent(CU.deniedText, isError: true)
     })
+
+    // MARK: - v0.15 notify/voice/app + jev_check (G1)
+    registry.register(Tool(
+        name: "notify_send",
+        description: "macOS user notification (title + body).",
+        inputSchema: objSchema(["title": "string", "body": "string"], required: ["title"])) { args async in
+        textContent(Notify.send(title: args["title"]?.string ?? "", body: args["body"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "tts_render",
+        description: "Render speech to an AIFF file (never plays audio — house voice-off rule). Returns the path.",
+        inputSchema: objSchema(["text": "string", "voice": "string"], required: ["text"])) { args async in
+        textContent(Notify.render(args["text"]?.string ?? "", voice: args["voice"]?.string))
+    })
+    registry.register(Tool(
+        name: "app_quit",
+        description: "Quit an app by exact name (no paths/bundles).",
+        inputSchema: objSchema(["name": "string"], required: ["name"])) { args async in
+        textContent(Notify.quitApp(args["name"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "jev_check",
+        description: "Jev citation-check: does the evidence support the claim? Returns the score. Needs MACRIX_JEV=1.",
+        inputSchema: objSchema(["claim": "string", "evidence": "string"], required: ["claim", "evidence"])) { args async in
+        guard Jev.enabled() else { return textContent(Jev.disabled(), isError: true) }
+        guard let c = args["claim"]?.string, let e = args["evidence"]?.string else {
+            return textContent("missing claim/evidence.", isError: true)
+        }
+        let (code, out) = Jev.runShell(Jev.helper(), args: ["citation-check", c, e], timeoutSeconds: 60)
+        return code == 0 ? textContent(out.trimmingCharacters(in: .whitespacesAndNewlines)) : textContent("citation-check failed.", isError: true)
+    })
 }
