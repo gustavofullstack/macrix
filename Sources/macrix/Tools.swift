@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. tools: health, calendar_list_calendars, calendar_search_events, reminders_search, notes_search_notes, shortcuts_list, shortcuts_run, jev_rerank, mail_search, messages_search, contacts_search, screen_capture. no daily limits, concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 100 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(

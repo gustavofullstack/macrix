@@ -1,30 +1,23 @@
 # macrix
 
-Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core) — Calendário, Lembretes, Notas,
-Shortcuts e um hook do Jev/TypeSafe. Sem limite diário, com quantos agentes
-quiser ao mesmo tempo.
+Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.24.0: 100 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
 
-Inspirado no [Macuse](https://macuse.app) (que trava em 100 chamadas/dia no
-plano grátis), reescrito do zero em Swift, sem dependências externas.
+Inspirado no [Macuse](https://macuse.app), reescrito do zero em Swift, sem dependências externas.
 
 ## Por que existe
 
-- **Sem teto**: nenhum contador diário no código. O limite é o seu hardware.
-- **Multi-agente**: registro de tools com lock, uma conexão por task — 10
-  chamadas concorrentes com 2 chaves diferentes respondem 10/10.
-- **Chaves múltiplas**: `MACRIX_KEYS` (vírgula) e/ou
-  `~/.config/macrix/keys` (uma por linha). Qualquer chave válida entra,
-  ao mesmo tempo que qualquer outra.
+- **Sem o teto deles**: o free do Macuse trava em 100 chamadas/dia; aqui o tier `free` tem 1000/dia/chave e os pagos são ilimitados na prática. O limite é o seu hardware.
+- **Multi-agente provado**: registro de tools com lock, uma conexão por task — 25 chamadas paralelas com a mesma chave respondem 25/25 (medido em 21/09/2026).
+- **Chaves múltiplas**: `MACRIX_KEYS` (vírgula) e/ou `~/.config/macrix/keys` (uma por linha). Qualquer chave válida entra, ao mesmo tempo que qualquer outra.
 
 ## Build
 
 ```sh
 swift build -c release   # binário em .build/release/macrix
-swift test               # 7 testes, zero rede
+swift test               # 80 testes, zero rede
 ```
 
-Só macOS 13+. Zero dependências (só Foundation, EventKit, Network e o
-`sqlite3` que já vem no sistema).
+Só macOS 13+. Só frameworks do sistema (Foundation, EventKit, Network, CryptoKit, CoreImage) + o `sqlite3` que já vem no sistema.
 
 ## Uso
 
@@ -35,49 +28,34 @@ macrix keys     # de onde as chaves vêm + quantas
 macrix version
 ```
 
-Endpoints: `POST /mcp` (Bearer obrigatório), `GET /health` (aberto).
+Endpoints: `POST /mcp` (Bearer [REDACTED]ório), `GET /health` (aberto), `GET /` (console, aberto), `GET /catalog` (100 tools em JSON, aberto), `GET /usage` (medição da chave, Bearer).
 
-## Tools (v0.3 — 21)
+## Tools (v0.24 — 100)
 
-### Rumo a 100 (roadmap)
-v0.3 fecha a base: computer-use (8), metering/licenças e 21 tools. Até 100:
-Mail compose/send, Messages send, Notas create/update, Calendário/Lembretes
-create/delete, Mapas/location, Atalhos com input, AX click-em-elemento,
-gravação de tela, timers/alarms, música/podcasts, Finder ops, rede/wifi,
-bateria/energia, Docker/local services, clipboard, menubar stats estilo
-CodexBar (janelas de uso e créditos por provider lendo logs locais) e
-licenças mensais via servidor de contas. Cada família entra com testes e
-prova viva antes do push.
+Contagem medida via `GET /catalog` em 21/09/2026. Fonte da verdade é o endpoint; a tabela agrupa por família:
 
-| Tool | O que faz |
+| Família | Tools |
 |---|---|
-| `health` | vivo + versão + capacidades |
-| `calendar_list_calendars` | calendários (EventKit) |
-| `calendar_search_events` | eventos por período (`today`, `+7d`, ISO-8601) |
-| `reminders_search` | lembretes por título |
-| `notes_search_notes` | Notas.app, leitura direta só-leitura do SQLite |
-| `shortcuts_list` / `shortcuts_run` | Atalhos do macOS |
-| `jev_rerank` | re-ranqueia passagens com o Jev local (só com `MACRIX_JEV=1`) |
-| `mail_search` | assuntos da caixa de entrada do Mail (só leitura) |
-| `messages_search` | textos do Messages por substring (só leitura) |
-| `contacts_search` | contatos por nome (telefones + e-mails) |
-| `screen_capture` | screenshot da tela principal (retorna o caminho do PNG) |
+| Apps Apple (calendário, lembretes, notas, atalhos, mail/messages, contatos, tela) | 14 |
+| Sistema e sondas (sys, launchd, host, tailscale, meta, plist, áudio, markdown) | 19 |
+| Arquivos e texto (file, zip, text, grep, csv) | 12 |
+| Web e rede (chromium, url, net) | 11 |
+| Codec e dados (b64, sha, uuid, json, qr, random, imagem, dir) | 11 |
+| Computer-use | 9 |
+| Jev/TypeSafe (route, rerank, eval, check, skill, models, ping) | 7 |
+| Clipboard e UI (clip, open, notify, voz-arquivo, quit) | 6 |
+| Catálogo e metering (catalog, usage, providers, health) | 6 |
+| Git (status, log, diff) + relógio | 5 |
 
-Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Access.
-Sem permissão, a tool devolve erro estruturado — nunca quebra a sessão.
+Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Access. Sem permissão, a tool devolve erro estruturado — nunca quebra a sessão. Voz nunca toca no alto-falante (`tts_render` gera arquivo).
 
 ## cmux
 
-`cmux/mcp.json` tem o bloco pronto (agora apontando o binário `macrix`) para os agentes que rodam nos painéis do
-[cmux](https://cmux.dev). `SKILL.md` documenta o uso agente-a-agente.
+`cmux/mcp.json` tem o bloco pronto (agora apontando o binário `macrix`) para os agentes que rodam nos painéis do [cmux](https://cmux.dev). `SKILL.md` documenta o uso agente-a-agente.
 
 ## Modelo (open-core, igual ao Macuse)
 
-Código MIT e grátis: tier `free` com 1000 chamadas/dia/chave (10x o free
-deles). `macrix license-issue --tier pro|lifetime` destrava ilimitado —
-mensalidade ou lifetime, emissão no servidor de contas (v0.3 auto-emite
-local como placeholder). Sem licença: free. Sem contador escondido: tudo
-passa pelo `usage_status`.
+Código MIT e grátis: `free` 1000/dia, `starter` US$20 (10k/dia), `growth` US$50 (50k/dia), `scale` US$100 (200k/dia), `max` US$200 e `lifetime` ilimitados. Quota estourada devolve erro `-32000` nomeando o tier — nunca silencia. Tudo passa pelo `usage_status` e pelo `GET /usage`. Cobrança via processador: checklist em `BILLING.md` (conta e emissão são do dono; o servidor já sabe ler o arquivo de licença e rebaixar sozinho no vencimento).
 
 ## Licença
 
