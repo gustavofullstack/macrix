@@ -664,6 +664,8 @@ public final class HarnessGate: @unchecked Sendable {
                 let left = Harness.ProcessTree.terminate(root: pid)
                 orphans.append(contentsOf: left)
             }
+            // and tell the canonical ledger the outcome is unknown (hold preserved, account frozen)
+            if let l = ledger { _ = l.markUnknown(k) }
             let line: [String: JSONValue] = ["ts": .string(iso.string(from: Date())), "lane": .string(v.0.rawValue), "op_id": .string(k),
                 "seconds": .number(0), "exit": .number(-1), "execution_status": .string("unknown"), "cost_status": .string("unknown"),
                 "note": .string("recovered after restart; started \(iso.string(from: v.1)); pid \(v.2 ?? 0)\(orphans.isEmpty ? "" : "; survivors \(orphans)")")]

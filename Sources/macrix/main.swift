@@ -44,6 +44,10 @@ case "serve":
     }
     let registry = ToolRegistry()
     registerAllTools(into: registry)
+    // Recovery must happen at boot, not at the first tool call: touching the gate
+    // here reloads persisted state, kills orphaned lanes and marks them unknown.
+    let gateBoot = HarnessGate.shared.status()
+    fputs("macrix: gate at boot → \(gateBoot)\n", stderr)
     do {
         let server = try HTTPServer(port: port, registry: registry, keys: keys)
         server.start()
