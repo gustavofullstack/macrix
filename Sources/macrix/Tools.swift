@@ -318,10 +318,9 @@ public func registerAllTools(into registry: ToolRegistry) {
             return textContent("missing query or candidates.", isError: true)
         }
         let items = cands.components(separatedBy: "\n---\n").filter { !$0.isEmpty }.prefix(10)
-        let helper = (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin/typesafe")
         var lines: [String] = []
         for item in items {
-            let (code, out) = runProcess("/bin/sh", ["-c", "bun '\(helper)' rerank \"\(q.replacingOccurrences(of: "\"", with: ""))\" \"\(item.replacingOccurrences(of: "\"", with: "").prefix(500))\""], timeoutSeconds: 60)
+            let (code, out) = Jev.runShell(Jev.helper(), args: ["rerank", q, String(item.prefix(500))], timeoutSeconds: 60)
             lines.append(code == 0 ? out.trimmingCharacters(in: .whitespacesAndNewlines) : "rerank failed for candidate")
         }
         return textContent(lines.joined(separator: "\n"))
@@ -595,4 +594,19 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
         textContent(Web.pdf(url: args["url"]?.string ?? ""))
     })
+
+    // MARK: - v0.11 jev routing (Jev behind everything)
+    registry.register(Tool(
+        name: "jev_route",
+        description: "Ask Jev which macrix tools fit a request; returns top-5 with noul scores. Needs MACRIX_JEV=1.",
+        inputSchema: objSchema(["request": "string"], required: ["request"])) { args async in
+        guard let req = args["request"]?.string, !req.isEmpty else {
+            return textContent("missing request.", isError: true)
+        }
+        return textContent(Jev.route(req, tools: registry.list()))
+    })
+    registry.register(Tool(
+        name: "jev_ping",
+        description: "Check the local Jev/TypeSafe brain is reachable.",
+        inputSchema: objSchema([:])) { _ async in textContent(Jev.ping()) })
 }
