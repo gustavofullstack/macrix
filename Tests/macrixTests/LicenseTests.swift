@@ -2,6 +2,17 @@ import XCTest
 @testable import macrix
 
 final class LicenseTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // Never pollute production metering: quota tests use a tmp file.
+        setenv("MACRIX_USAGE_PATH", "/tmp/macrix_test_usage.json", 1)
+        try? FileManager.default.removeItem(atPath: "/tmp/macrix_test_usage.json")
+    }
+    override func tearDown() {
+        unsetenv("MACRIX_USAGE_PATH")
+        try? FileManager.default.removeItem(atPath: "/tmp/macrix_test_usage.json")
+        super.tearDown()
+    }
     func testFreeQuota() {
         XCTAssertEqual(License.Tier.free.dailyQuota, 1000)
         XCTAssertNil(License.Tier.lifetime.dailyQuota)

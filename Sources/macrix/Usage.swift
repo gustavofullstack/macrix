@@ -46,7 +46,12 @@ public enum License {
         (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix")
     }
     static var licensePath: String { (dir as NSString).appendingPathComponent("license") }
-    static var usagePath: String { (dir as NSString).appendingPathComponent("usage.json") }
+    /// Overridable so tests never touch production metering:
+    /// set MACRIX_USAGE_PATH to a tmp file.
+    static var usagePath: String {
+        if let o = ProcessInfo.processInfo.environment["MACRIX_USAGE_PATH"], !o.isEmpty { return o }
+        return (dir as NSString).appendingPathComponent("usage.json")
+    }
 
     public static func current() -> Info {
         guard let content = try? String(contentsOfFile: licensePath, encoding: .utf8) else {
