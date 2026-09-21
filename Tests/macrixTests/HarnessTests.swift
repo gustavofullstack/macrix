@@ -86,3 +86,50 @@ final class EnvInventoryTests: XCTestCase {
         for n in ["agents_list", "agent_run", "agent_route", "env_inventory"] { XCTAssertTrue(names.contains(n), n) }
     }
 }
+
+final class HarnessGateTests: XCTestCase {
+    func makeGate() -> HarnessGate {
+        let p = "/tmp/macrix_gate_\(UUID().uuidString).jsonl"
+        return HarnessGate(ledgerPath: p)
+    }
+    func ok(_ out: String, secs: Double = 1) -> Result<Harness.RunResult, JevError> {
+        .success(Harness.RunResult(agent: .muse, argv: ["x"], exit: 0, seconds: secs, output: out, truncated: false))
+    }
+    func testConcurrencyAndRelease() {
+        let g = makeGate(); g.maxConcurrent = 2
+        XCTAssertNil(g.admit(.claude_sonnet, opId: nil)); XCTAssertNil(g.admit(.claude_sonnet, opId: nil))
+        XCTAssertEqual(g.admit(.claude_sonnet, opId: nil), .busy(2))
+        XCTAssertEqual(g.settle(.claude_sonnet, opId: nil, result: ok("fine")), "settled")
+        XCTAssertNil(g.admit(.claude_sonnet, opId: nil))
+    }
+    func testDedupeWindow() {
+        let g = makeGate(); let t0 = Date()
+        XCTAssertNil(g.admit(.muse, opId: "op-1", now: t0))
+        _ = g.settle(.muse, opId: "op-1", result: ok("done"), now: t0)
+        XCTAssertEqual(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(60)), .duplicate("op-1"))
+        XCTAssertNil(g.admit(.muse, opId: "op-1", now: t0.addingTimeInterval(700)))   // window expired
+    }
+    func testQuotaSuspendsLaneAndTimeoutIsUnknown() {
+        let g = makeGate(); let t0 = Date()
+        XCTAssertNil(g.admit(.muse, opId: nil, now: t0))
+        XCTAssertEqual(g.settle(.muse, opId: nil, result: ok("API error 429: Subscription quota exhausted"), now: t0), "quota")
+        if case .suspended(.muse, let until)? = g.admit(.muse, opId: nil, now: t0.addingTimeInterval(5)) {
+            XCTAssertEqual(until.timeIntervalSince(t0), 1800, accuracy: 1)
+        } else { XCTFail("muse should be suspended") }
+        XCTAssertNil(g.admit(.claude_sonnet, opId: nil, now: t0.addingTimeInterval(5)))   // other lanes unaffected
+        XCTAssertNil(g.admit(.muse, opId: nil, now: t0.addingTimeInterval(1801)))
+        XCTAssertEqual(g.settle(.muse, opId: nil, result: ok("partial\n[macrix: killed after 5s]")), "unknown")
+        XCTAssertEqual(g.settle(.muse, opId: nil, result: .failure(JevError("workspace refused"))), "refused")
+    }
+    func testLedgerLinesAndStatus() {
+        let g = makeGate()
+        XCTAssertNil(g.admit(.claude_opus, opId: "abc"))
+        _ = g.settle(.claude_opus, opId: "abc", result: ok("x", secs: 2.34))
+        let lines = (try? String(contentsOfFile: g.ledgerPath, encoding: .utf8))?.split(separator: "\n") ?? []
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines[0].contains("\"lane\":\"claude_opus\"") && lines[0].contains("\"op_id\":\"abc\"") && lines[0].contains("\"status\":\"settled\""), String(lines[0]))
+        XCTAssertTrue(g.status().contains("running 0/2"))
+        XCTAssertTrue(HarnessGate.looksLikeQuota("You've hit your usage limit") && !HarnessGate.looksLikeQuota("all good"))
+        try? FileManager.default.removeItem(atPath: g.ledgerPath)
+    }
+}

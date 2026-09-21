@@ -56,6 +56,6 @@ final class HundredTests: XCTestCase {
     func testHundred() {
         let r = ToolRegistry()
         registerAllTools(into: r)
-        XCTAssertEqual(r.list().count, 106)
+        XCTAssertEqual(r.list().count, 107)
     }
 }

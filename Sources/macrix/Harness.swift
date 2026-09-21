@@ -131,7 +131,12 @@ public enum Harness {
         let deadline = Date().addingTimeInterval(min(max(timeout, 5), 900))
         while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
         var killed = false
-        if proc.isRunning { proc.terminate(); Thread.sleep(forTimeInterval: 1); if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }; killed = true }
+        if proc.isRunning {
+            _ = runProcess("/usr/bin/pkill", ["-TERM", "-P", String(proc.processIdentifier)], timeoutSeconds: 3)
+            proc.terminate(); Thread.sleep(forTimeInterval: 1)
+            if proc.isRunning { _ = runProcess("/usr/bin/pkill", ["-KILL", "-P", String(proc.processIdentifier)], timeoutSeconds: 3); kill(proc.processIdentifier, SIGKILL) }
+            killed = true
+        }
         proc.waitUntilExit()
         pipe.fileHandleForReading.readabilityHandler = nil
         lock.lock(); let all = data; lock.unlock()
@@ -240,4 +245,82 @@ public enum EnvInventory {
 
 extension JSONValue {
     var arrayCount: Int { if case .array(let a) = self { return a.count }; return 0 }
+}
+
+// MARK: - Gate: concurrency, dedupe, 429 suspension, attempt ledger (ChatGPT task 4)
+
+/// Every agent_run passes here first. Money is not metered for CLIs (they are
+/// subscriptions); what is metered is attempts, seconds and outcome, per lane,
+/// so a lane that answers 429 stops being called and duplicates never run twice.
+public final class HarnessGate: @unchecked Sendable {
+    public static let shared = HarnessGate(ledgerPath: (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix/agent-ledger.jsonl"))
+    private let lock = NSLock()
+    private var running = 0
+    private var seen: [String: Date] = [:]                 // op_id → first seen
+    private var suspended: [Harness.Agent: Date] = [:]     // lane → until
+    public let ledgerPath: String
+    // ponytail: fixed knobs; per-lane values when we have real contention data
+    public var maxConcurrent = 2
+    public var dedupeWindow: TimeInterval = 600
+    public var suspendFor: TimeInterval = 1800
+
+    public init(ledgerPath: String) { self.ledgerPath = ledgerPath }
+
+    public enum Refusal: Equatable { case busy(Int), duplicate(String), suspended(Harness.Agent, Date) }
+
+    /// Reserve a slot. Returns nil when admitted.
+    public func admit(_ lane: Harness.Agent, opId: String?, now: Date = Date()) -> Refusal? {
+        lock.lock(); defer { lock.unlock() }
+        if let until = suspended[lane], until > now { return .suspended(lane, until) }
+        if let id = opId, !id.isEmpty {
+            seen = seen.filter { now.timeIntervalSince($0.value) < dedupeWindow }
+            if seen[id] != nil { return .duplicate(id) }
+        }
+        if running >= maxConcurrent { return .busy(running) }
+        running += 1
+        if let id = opId, !id.isEmpty { seen[id] = now }
+        return nil
+    }
+
+    /// Release the slot and record the outcome. Kill by timeout is `unknown`
+    /// (the CLI may have done work we did not observe), never `settled`.
+    public func settle(_ lane: Harness.Agent, opId: String?, result: Result<Harness.RunResult, JevError>, now: Date = Date()) -> String {
+        lock.lock(); defer { lock.unlock() }
+        running = max(0, running - 1)
+        var status = "settled"; var seconds = 0.0; var exit: Int32 = -1
+        switch result {
+        case .failure: status = "refused"
+        case .success(let r):
+            seconds = r.seconds; exit = r.exit
+            if r.output.contains("[macrix: killed after") { status = "unknown" }
+            if HarnessGate.looksLikeQuota(r.output) {
+                status = "quota"
+                suspended[lane] = now.addingTimeInterval(suspendFor)
+            }
+        }
+        let line: [String: JSONValue] = ["ts": .string(ISO8601DateFormatter().string(from: now)), "lane": .string(lane.rawValue),
+            "op_id": .string(opId ?? ""), "seconds": .number((seconds * 10).rounded() / 10), "exit": .number(Double(exit)), "status": .string(status)]
+        if let d = try? JSONEncoder().encode(JSONValue.object(line)), let s = String(data: d, encoding: .utf8) {
+            let dir = (ledgerPath as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            if let h = FileHandle(forWritingAtPath: ledgerPath) { h.seekToEndOfFile(); h.write(Data((s + "\n").utf8)); try? h.close() }
+            else { try? (s + "\n").write(toFile: ledgerPath, atomically: true, encoding: .utf8) }
+        }
+        return status
+    }
+
+    /// Provider quota exhaustion as the CLIs print it today (Muse, Codex, Antigravity).
+    public static func looksLikeQuota(_ out: String) -> Bool {
+        let l = out.lowercased()
+        return l.contains("429") || l.contains("quota exhausted") || l.contains("usage limit") || l.contains("resource_exhausted") || l.contains("rate_limit_error")
+    }
+
+    public func status(now: Date = Date()) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let s = suspended.filter { $0.value > now }.map { "\($0.key.rawValue) until \(ISO8601DateFormatter().string(from: $0.value))" }.sorted()
+        return "running \(running)/\(maxConcurrent) · suspended: \(s.isEmpty ? "none" : s.joined(separator: ", ")) · ledger \(ledgerPath)"
+    }
+
+    /// Test hook.
+    public func reset() { lock.lock(); running = 0; seen = [:]; suspended = [:]; lock.unlock() }
 }

@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. 106 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 107 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -1027,20 +1027,29 @@ func registerHarnessTools(into registry: ToolRegistry) {
         inputSchema: objSchema([:])) { _ async in textContent(Harness.listText()) })
     registry.register(Tool(
         name: "agent_run",
-        description: "Run one headless prompt on a lane inside an allowed workspace (~/Projetos, ~/Documents, /tmp). args: agent, prompt, workspace, model?, yolo? (\"true\" adds the CLI's auto-approve flag), timeout? (s, max 900). Returns exit code + bounded output.",
-        inputSchema: objSchema(["agent": "string", "prompt": "string", "workspace": "string", "model": "string", "yolo": "string", "timeout": "string"],
+        description: "Run one headless prompt on a lane inside an allowed workspace (~/Projetos, ~/Documents, /tmp). args: agent, prompt, workspace, model?, yolo? (\"true\" adds the CLI's auto-approve flag), timeout? (s, max 900), op_id? (dedupe: same id never runs twice in 10 min). Max 2 runs in flight; a lane answering 429 is suspended 30 min; timeout kill = status unknown. Ledger: ~/.config/macrix/agent-ledger.jsonl.",
+        inputSchema: objSchema(["agent": "string", "prompt": "string", "workspace": "string", "model": "string", "yolo": "string", "timeout": "string", "op_id": "string"],
                                required: ["agent", "prompt"])) { args async in
         guard let a = Harness.Agent(rawValue: args["agent"]?.string ?? "") else {
             return textContent("unknown agent; one of: " + Harness.Agent.allCases.map { $0.rawValue }.joined(separator: ", "), isError: true)
         }
+        let opId = args["op_id"]?.string
+        if let refusal = HarnessGate.shared.admit(a, opId: opId) {
+            switch refusal {
+            case .busy(let n): return textContent("busy: \(n) agent runs in flight (max \(HarnessGate.shared.maxConcurrent)); retry later.", isError: true)
+            case .duplicate(let id): return textContent("duplicate op_id \(id): already ran within the dedupe window; not running twice.", isError: true)
+            case .suspended(let lane, let until): return textContent("\(lane.rawValue) suspended after a quota answer until \(ISO8601DateFormatter().string(from: until)).", isError: true)
+            }
+        }
         let r = Harness.run(a, prompt: args["prompt"]?.string ?? "", workspace: args["workspace"]?.string ?? "",
                             model: args["model"]?.string, yolo: (args["yolo"]?.string ?? "false") == "true",
                             timeout: Double(args["timeout"]?.string ?? "") ?? 300)
+        let status = HarnessGate.shared.settle(a, opId: opId, result: r)
         switch r {
         case .failure(let e): return textContent(e.message, isError: true)
         case .success(let ok):
             let shown = ok.argv.map { $0 == (args["prompt"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) ? "<prompt>" : $0 }.joined(separator: " ")
-            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
+            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · status \(status)\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
         }
     })
     registry.register(Tool(
@@ -1067,6 +1076,10 @@ func registerHarnessTools(into registry: ToolRegistry) {
             return textContent(text)
         }
     })
+    registry.register(Tool(
+        name: "agents_gate",
+        description: "Harness gate state: runs in flight, lanes suspended by quota, ledger path.",
+        inputSchema: objSchema([:])) { _ async in textContent(HarnessGate.shared.status()) })
     registry.register(Tool(
         name: "env_inventory",
         description: "Read-only census of what agents can use on this Mac: MCP servers, skills, commands, plugins, hooks, opencode agents/providers, codex profiles, muse skills, installed lanes. Names only, no values.",
