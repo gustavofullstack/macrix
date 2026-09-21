@@ -1,6 +1,6 @@
 # macrix
 
-Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.28.0: 107 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
+Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.29.0: 108 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
 
 Inspirado no [Macuse](https://macuse.app), reescrito do zero em Swift, sem dependências externas.
 
@@ -28,9 +28,9 @@ macrix keys     # de onde as chaves vêm + quantas
 macrix version
 ```
 
-Endpoints: `POST /mcp` (Bearer [REDACTED]ório), `GET /health` (aberto), `GET /` (console, aberto), `GET /catalog` (107 tools em JSON, aberto), `GET /usage` (medição da chave, Bearer).
+Endpoints: `POST /mcp` (Bearer [REDACTED]ório), `GET /health` (aberto), `GET /` (console, aberto), `GET /catalog` (108 tools em JSON, aberto), `GET /usage` (medição da chave, Bearer).
 
-## Tools (v0.27 — 107)
+## Tools (v0.29 — 108)
 
 Contagem medida via `GET /catalog` em 21/09/2026. Fonte da verdade é o endpoint; a tabela agrupa por família:
 
@@ -47,13 +47,15 @@ Contagem medida via `GET /catalog` em 21/09/2026. Fonte da verdade é o endpoint
 | Catálogo e metering (catalog, usage, providers, health) | 6 |
 | Git (status, log, diff) + relógio | 5 |
 | Voz → Jev → ação antes da frase acabar (`voice_decide`, `voice_listen`) | 2 |
-| Harness: CLIs como tools + Jev escolhe a faixa (`agents_list`, `agent_run`, `agent_route`, `agents_gate`, `env_inventory`) | 5 |
+| Harness: CLIs como tools + Jev escolhe a faixa (`agents_list`, `agent_run`, `agent_route`, `agents_gate`, `journey_run`, `env_inventory`) | 6 |
 
 Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Access. Sem permissão, a tool devolve erro estruturado — nunca quebra a sessão. Voz nunca toca no alto-falante (`tts_render` gera arquivo).
 
 ## Harness: os CLIs do Mac como tools, o Jev escolhe a faixa (v0.26)
 
-`agents_list` mostra as faixas instaladas: `claude_fable` (o mais difícil: arquitetura, verificação), `claude_opus` (implementação média), `claude_sonnet` (simples e repetitivo), `muse` (volume barato, Meta Muse Spark 1.3 community), `codex` e `antigravity` (revisão cruzada, limitados por cota), `opencode`, `goose`. `agent_run` roda um prompt headless numa faixa dentro de um workspace permitido (`~/Projetos`, `~/Documents`, `/tmp`), com timeout e saída limitada; o prompt vai como argv, nunca por shell; `yolo=true` acrescenta a flag de auto-aprovação do próprio CLI. `agent_route` pergunta ao Jev (choice) qual faixa a tarefa merece e se precisa de revisão cruzada (noul); `execute=true` já roda. **Gate (v0.27):** no máximo 2 `agent_run` em voo; `op_id` repetido em 10 min não roda de novo; faixa que responde 429/quota fica suspensa 30 min; kill por timeout registra `unknown`, nunca `settled`; filhos do CLI são mortos junto (`pkill -P`). Cada tentativa vai para `~/.config/macrix/agent-ledger.jsonl` (ts, lane, op_id, seconds, exit, status). `agents_gate` mostra o estado. `env_inventory` é o censo do que os agentes têm aqui: MCPs, skills, commands, plugins, hooks, agentes do opencode, perfis do codex, skills do muse (só nomes).
+`agents_list` mostra as faixas instaladas: `claude_fable` (o mais difícil: arquitetura, verificação), `claude_opus` (implementação média), `claude_sonnet` (simples e repetitivo), `muse` (volume barato, Meta Muse Spark 1.3 community), `codex` e `antigravity` (revisão cruzada, limitados por cota), `opencode`, `goose`. `agent_run` roda um prompt headless numa faixa dentro de um workspace permitido (`~/Projetos`, `~/Documents`, `/tmp`), com timeout e saída limitada; o prompt vai como argv, nunca por shell; `yolo=true` acrescenta a flag de auto-aprovação do próprio CLI. `agent_route` pergunta ao Jev (choice) qual faixa a tarefa merece e se precisa de revisão cruzada (noul); `execute=true` já roda. **Gate (v0.27):** no máximo 2 `agent_run` em voo; `op_id` repetido em 10 min não roda de novo; faixa que responde 429/quota fica suspensa 30 min; kill por timeout registra `unknown`, nunca `settled`; filhos do CLI são mortos junto (`pkill -P`). Cada tentativa vai para `~/.config/macrix/agent-ledger.jsonl` (ts, lane, op_id, seconds, exit, status). `agents_gate` mostra o estado. No ledger, `execution_status` (settled/unknown/quota/refused) e `cost_status` andam separados: `exit 0` prova execução, nunca custo — `cost_status` fica `unknown` até algo conciliar com o medidor do provider.
+
+**Jornada (v0.29):** `journey_run` amarra tudo num `journey_id` único: Jev roteia → `needs_review ≥ 0,70` para e devolve `needs_human_review` → gate admite (o mesmo id nunca roda duas vezes) → a faixa executa no workspace → ledger grava execution/cost → log de 5 passos com o desfecho. `env_inventory` é o censo do que os agentes têm aqui: MCPs, skills, commands, plugins, hooks, agentes do opencode, perfis do codex, skills do muse (só nomes).
 
 ## Voz: age antes de a frase acabar (v0.25)
 

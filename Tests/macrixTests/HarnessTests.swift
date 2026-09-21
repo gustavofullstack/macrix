@@ -127,9 +127,45 @@ final class HarnessGateTests: XCTestCase {
         _ = g.settle(.claude_opus, opId: "abc", result: ok("x", secs: 2.34))
         let lines = (try? String(contentsOfFile: g.ledgerPath, encoding: .utf8))?.split(separator: "\n") ?? []
         XCTAssertEqual(lines.count, 1)
-        XCTAssertTrue(lines[0].contains("\"lane\":\"claude_opus\"") && lines[0].contains("\"op_id\":\"abc\"") && lines[0].contains("\"status\":\"settled\""), String(lines[0]))
+        XCTAssertTrue(lines[0].contains("\"lane\":\"claude_opus\"") && lines[0].contains("\"op_id\":\"abc\"") && lines[0].contains("\"execution_status\":\"settled\"") && lines[0].contains("\"cost_status\":\"unknown\""), String(lines[0]))
         XCTAssertTrue(g.status().contains("running 0/2"))
         XCTAssertTrue(HarnessGate.looksLikeQuota("You've hit your usage limit") && !HarnessGate.looksLikeQuota("all good"))
         try? FileManager.default.removeItem(atPath: g.ledgerPath)
+    }
+}
+
+
+final class JourneyTests: XCTestCase {
+    func gate() -> HarnessGate { HarnessGate(ledgerPath: "/tmp/macrix_journey_\(UUID().uuidString).jsonl") }
+    func fakeRoute(_ lane: String, review: Double) -> FakeJev {
+        FakeJev(.object(["lane": .object(["choice": .string(lane), "probabilities": .object([lane: .number(0.9)])]),
+                         "needs_review": .object(["noul": .number(review)])]))
+    }
+    func testHappyPathWithFakeRunner() {
+        let g = gate()
+        let out = Journey.run(task: "renomear foo", journeyId: "J-1", workspace: "/tmp", client: fakeRoute("claude_sonnet", review: 0.1), gate: g,
+                              available: [.claude_sonnet, .muse]) { lane, _, _, _, _ in
+            .success(Harness.RunResult(agent: lane, argv: ["x"], exit: 0, seconds: 1.5, output: "done", truncated: false))
+        }
+        XCTAssertTrue(out.contains("1 route (jev): lane: claude_sonnet"), out)
+        XCTAssertTrue(out.contains("op_id=J-1") && out.contains("execution_status=settled · cost_status=unknown") && out.hasSuffix("outcome: completed"), out)
+        let ledger = (try? String(contentsOfFile: g.ledgerPath, encoding: .utf8)) ?? ""
+        XCTAssertTrue(ledger.contains("\"op_id\":\"J-1\"") && ledger.contains("\"cost_status\":\"unknown\""))
+        // same journey id again → gate dedupe, no second run
+        let again = Journey.run(task: "renomear foo", journeyId: "J-1", workspace: "/tmp", client: fakeRoute("claude_sonnet", review: 0.1), gate: g,
+                                available: [.claude_sonnet]) { _, _, _, _, _ in XCTFail("must not run twice"); return .failure(JevError("x")) }
+        XCTAssertTrue(again.contains("outcome: refused_by_gate"), again)
+        try? FileManager.default.removeItem(atPath: g.ledgerPath)
+    }
+    func testReviewStopsBeforeExecution() {
+        var ran = false
+        let out = Journey.run(task: "apagar o banco de produção", journeyId: "J-2", workspace: "/tmp", client: fakeRoute("claude_fable", review: 0.9), gate: gate(),
+                              available: [.claude_fable]) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
+        XCTAssertFalse(ran); XCTAssertTrue(out.hasSuffix("outcome: needs_human_review"), out)
+    }
+    func testBadIdAndJevDown() {
+        XCTAssertTrue(Journey.run(task: "x", journeyId: "bad id!", workspace: "/tmp", client: fakeRoute("muse", review: 0), gate: gate(), available: [.muse]).hasPrefix("journey refused"))
+        let down = fakeRoute("muse", review: 0); down.fail = "http 503"
+        XCTAssertTrue(Journey.run(task: "x", journeyId: "J-3", workspace: "/tmp", client: down, gate: gate(), available: [.muse]).hasSuffix("outcome: blocked_at_route"))
     }
 }

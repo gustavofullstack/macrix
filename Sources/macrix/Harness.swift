@@ -204,6 +204,47 @@ extension Harness.Route {
     public static func == (l: Harness.Route, r: Harness.Route) -> Bool { l.lane == r.lane && l.p == r.p && l.review == r.review }
 }
 
+// MARK: - Journey: one task, one id, every step on record (ChatGPT task 5)
+
+public enum Journey {
+    /// route (Jev) → gate → run → ledger, all tagged with `journeyId`.
+    /// Returns a human log; the ledger line carries the machine record.
+    public static func run(task: String, journeyId: String, workspace: String, client: JevClient, gate: HarnessGate,
+                           available: [Harness.Agent], yolo: Bool = false, timeout: Double = 300,
+                           runner: (Harness.Agent, String, String, Bool, Double) -> Result<Harness.RunResult, JevError> = { a, p, w, y, to in Harness.run(a, prompt: p, workspace: w, yolo: y, timeout: to) }) -> String {
+        let id = journeyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else {
+            return "journey refused: journey_id must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+        }
+        var log = ["journey \(id)"]
+        let route: Harness.Route
+        switch Harness.route(task: task, client: client, available: available) {
+        case .failure(let e): return (log + ["1 route: \(e.message)", "outcome: blocked_at_route"]).joined(separator: "\n")
+        case .success(let r): route = r
+        }
+        log.append("1 route (jev): " + Harness.routeText(route).replacingOccurrences(of: "\n", with: " · "))
+        if route.review >= 0.70 {
+            log.append("2 authorization: needs_review \(String(format: "%.2f", route.review)) ≥ 0.70 → prepared, not executed")
+            return (log + ["outcome: needs_human_review"]).joined(separator: "\n")
+        }
+        if let refusal = gate.admit(route.lane, opId: id) {
+            log.append("2 gate: refused \(refusal)")
+            return (log + ["outcome: refused_by_gate"]).joined(separator: "\n")
+        }
+        log.append("2 authorization: lane \(route.lane.rawValue) admitted, op_id=\(id)")
+        let result = runner(route.lane, task, workspace, yolo, timeout)
+        let status = gate.settle(route.lane, opId: id, result: result)
+        switch result {
+        case .failure(let e): log.append("3 execute: \(e.message)")
+        case .success(let r): log.append("3 execute: exit \(r.exit) · \(String(format: "%.1f", r.seconds)) s · \(r.output.count) chars")
+        }
+        log.append("4 reconcile: execution_status=\(status) · cost_status=unknown (no provider meter for CLIs yet)")
+        log.append("5 evidence: ledger \(gate.ledgerPath) (op_id=\(id))")
+        log.append("outcome: \(status == "settled" ? "completed" : status)")
+        return log.joined(separator: "\n")
+    }
+}
+
 // MARK: - Environment inventory (read-only)
 
 public enum EnvInventory {
@@ -298,8 +339,11 @@ public final class HarnessGate: @unchecked Sendable {
                 suspended[lane] = now.addingTimeInterval(suspendFor)
             }
         }
+        // ChatGPT review (21/09): exit 0 proves execution, never cost. Cost stays
+        // "unknown" until something reconciles it against the provider's meter.
         let line: [String: JSONValue] = ["ts": .string(ISO8601DateFormatter().string(from: now)), "lane": .string(lane.rawValue),
-            "op_id": .string(opId ?? ""), "seconds": .number((seconds * 10).rounded() / 10), "exit": .number(Double(exit)), "status": .string(status)]
+            "op_id": .string(opId ?? ""), "seconds": .number((seconds * 10).rounded() / 10), "exit": .number(Double(exit)),
+            "execution_status": .string(status), "cost_status": .string("unknown")]
         if let d = try? JSONEncoder().encode(JSONValue.object(line)), let s = String(data: d, encoding: .utf8) {
             let dir = (ledgerPath as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

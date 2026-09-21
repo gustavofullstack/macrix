@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. 107 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 108 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -1049,7 +1049,7 @@ func registerHarnessTools(into registry: ToolRegistry) {
         case .failure(let e): return textContent(e.message, isError: true)
         case .success(let ok):
             let shown = ok.argv.map { $0 == (args["prompt"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) ? "<prompt>" : $0 }.joined(separator: " ")
-            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · status \(status)\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
+            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s · execution \(status) · cost unknown\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
         }
     })
     registry.register(Tool(
@@ -1075,6 +1075,17 @@ func registerHarnessTools(into registry: ToolRegistry) {
             }
             return textContent(text)
         }
+    })
+    registry.register(Tool(
+        name: "journey_run",
+        description: "End-to-end with one id: Jev routes the task to a lane → needs_review ≥ 0.70 stops for a human → gate admits (dedupe by journey_id) → lane runs headless in the workspace → ledger records execution_status and cost_status=unknown. args: task, journey_id, workspace?, yolo?, timeout?.",
+        inputSchema: objSchema(["task": "string", "journey_id": "string", "workspace": "string", "yolo": "string", "timeout": "string"], required: ["task", "journey_id"])) { args async in
+        guard let key = Voice.apiKey() else { return textContent("jev unavailable: TYPESAFE_API_KEY missing.", isError: true) }
+        let avail = Harness.Agent.allCases.filter { Harness.resolve($0) != nil }
+        return textContent(Journey.run(task: args["task"]?.string ?? "", journeyId: args["journey_id"]?.string ?? "",
+                                       workspace: args["workspace"]?.string ?? "", client: TypeSafeHTTP(key: key), gate: HarnessGate.shared,
+                                       available: avail, yolo: (args["yolo"]?.string ?? "false") == "true",
+                                       timeout: Double(args["timeout"]?.string ?? "") ?? 300))
     })
     registry.register(Tool(
         name: "agents_gate",
