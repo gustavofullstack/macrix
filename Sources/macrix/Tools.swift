@@ -745,4 +745,37 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["url": "string"], required: ["url"])) { args async in
         textContent(WebClip.open(args["url"]?.string ?? ""))
     })
+
+    // MARK: - v0.17 git read-only + clock (G1)
+    registry.register(Tool(
+        name: "git_status",
+        description: "Short git status of a local repo path. Read-only.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Git.status(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "git_log",
+        description: "One-line git log of a local repo path (max 30). Read-only.",
+        inputSchema: objSchema(["path": "string", "n": "string"], required: ["path"])) { args async in
+        textContent(Git.log(args["path"]?.string ?? "", n: Int(args["n"]?.string ?? "10") ?? 10))
+    })
+    registry.register(Tool(
+        name: "git_diffstat",
+        description: "git diff --stat of a local repo path. Read-only.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Git.diffstat(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "time_now",
+        description: "Current local time (ISO-8601 with zone).",
+        inputSchema: objSchema([:])) { _ async in textContent(Clock.now()) })
+    registry.register(Tool(
+        name: "time_world",
+        description: "Current time in 1-5 IANA zones (comma-separated).",
+        inputSchema: objSchema(["zones": "string"], required: ["zones"])) { args async in
+        let zs = (args["zones"]?.string ?? "").split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        return textContent(Clock.world(zs))
+    })
 }
