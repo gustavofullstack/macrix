@@ -159,7 +159,7 @@ final class JourneyTests: XCTestCase {
     }
     func testReviewStopsBeforeExecution() {
         var ran = false
-        let out = Journey.run(task: "apagar o banco de produção", journeyId: "J-2", workspace: "/tmp", client: fakeRoute("claude_fable", review: 0.9), gate: gate(),
+        let out = Journey.run(task: "apagar todos os arquivos gerados do projeto", journeyId: "J-2", workspace: "/tmp", client: fakeRoute("claude_fable", review: 0.9), gate: gate(),
                               available: [.claude_fable]) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
         XCTAssertFalse(ran); XCTAssertTrue(out.hasSuffix("outcome: needs_human_review"), out)
     }
@@ -167,5 +167,65 @@ final class JourneyTests: XCTestCase {
         XCTAssertTrue(Journey.run(task: "x", journeyId: "bad id!", workspace: "/tmp", client: fakeRoute("muse", review: 0), gate: gate(), available: [.muse]).hasPrefix("journey refused"))
         let down = fakeRoute("muse", review: 0); down.fail = "http 503"
         XCTAssertTrue(Journey.run(task: "x", journeyId: "J-3", workspace: "/tmp", client: down, gate: gate(), available: [.muse]).hasSuffix("outcome: blocked_at_route"))
+    }
+}
+
+
+final class GatePersistenceAndApprovalTests: XCTestCase {
+    func path() -> String { "/tmp/macrix_gp_\(UUID().uuidString).jsonl" }
+    func ok(_ lane: Harness.Agent) -> Result<Harness.RunResult, JevError> { .success(Harness.RunResult(agent: lane, argv: ["x"], exit: 0, seconds: 1, output: "ok", truncated: false)) }
+    func testStateSurvivesRestartAndInFlightBecomesUnknown() {
+        let p = path()
+        let g1 = HarnessGate(ledgerPath: p)
+        XCTAssertNil(g1.admit(.muse, opId: "op-A")); _ = g1.settle(.muse, opId: "op-A", result: .success(Harness.RunResult(agent: .muse, argv: [], exit: 1, seconds: 2, output: "429 quota", truncated: false)))
+        XCTAssertNil(g1.admit(.claude_sonnet, opId: "op-B"))          // left in flight → simulated crash
+        let g2 = HarnessGate(ledgerPath: p)                             // "restart"
+        XCTAssertEqual(g2.admit(.claude_sonnet, opId: "op-A"), .duplicate("op-A"))   // seen persisted (dedupe is per op_id)
+        if case .suspended(.muse, _)? = g2.admit(.muse, opId: "op-Z") {} else { XCTFail("suspension should persist") }
+        XCTAssertNil(g2.admit(.claude_sonnet, opId: "op-C"))            // slot recovered
+        let ledger = (try? String(contentsOfFile: p, encoding: .utf8)) ?? ""
+        XCTAssertTrue(ledger.contains("\"op_id\":\"op-B\"") && ledger.contains("recovered after restart") && ledger.contains("\"execution_status\":\"unknown\""), ledger)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: g2.statePath))
+        for f in [p, g2.statePath] { try? FileManager.default.removeItem(atPath: f) }
+    }
+    func testApprovalIsSingleUseBoundToTaskAndExpires() {
+        let g = HarnessGate(ledgerPath: path()); let t0 = Date()
+        let a = g.issueApproval(journeyId: "J-9", lane: .claude_fable, task: "refatorar o daemon", now: t0)
+        XCTAssertTrue(a.token.hasPrefix("apr_"))
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: "apr_wrong", task: "refatorar o daemon", now: t0), .wrongToken)
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon E apagar tudo", now: t0), .taskChanged)
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon", now: t0), .ok(.claude_fable))
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-9", token: a.token, task: "refatorar o daemon", now: t0), .used)
+        let b = g.issueApproval(journeyId: "J-10", lane: .muse, task: "x", ttl: 10, now: t0)
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-10", token: b.token, task: "x", now: t0.addingTimeInterval(11)), .expired)
+        XCTAssertEqual(g.consumeApproval(journeyId: "J-none", token: "apr_x", task: "x"), .missing)
+        try? FileManager.default.removeItem(atPath: g.statePath)
+    }
+    func testProductionBlockedByDefaultEvenWithToken() {
+        XCTAssertTrue(HarnessGate.touchesProduction("reiniciar o container no EasyPanel da produção"))
+        XCTAssertTrue(HarnessGate.touchesProduction("ssh 100.110.127.44 docker restart api"))
+        XCTAssertFalse(HarnessGate.touchesProduction("renomear variável no arquivo local"))
+        let g = HarnessGate(ledgerPath: path())
+        let fake = FakeJev(.object(["lane": .object(["choice": .string("claude_fable"), "probabilities": .object(["claude_fable": .number(0.9)])]), "needs_review": .object(["noul": .number(0.2)])]))
+        var ran = false
+        let out = Journey.run(task: "docker restart api na producao", journeyId: "J-P", workspace: "/tmp", client: fake, gate: g, available: [.claude_fable]) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
+        XCTAssertFalse(ran); XCTAssertTrue(out.hasSuffix("outcome: blocked_production"), out)
+        let a = g.issueApproval(journeyId: "J-P2", lane: .claude_fable, task: "docker stop api")
+        let out2 = Journey.approve(journeyId: "J-P2", token: a.token, task: "docker stop api", workspace: "/tmp", gate: g) { _, _, _, _, _ in ran = true; return .failure(JevError("x")) }
+        XCTAssertFalse(ran); XCTAssertTrue(out2.hasSuffix("outcome: blocked_production"), out2)
+        try? FileManager.default.removeItem(atPath: g.statePath)
+    }
+    func testReviewedJourneyThenApproveRunsOnce() {
+        let g = HarnessGate(ledgerPath: path())
+        let fake = FakeJev(.object(["lane": .object(["choice": .string("claude_opus"), "probabilities": .object(["claude_opus": .number(0.8)])]), "needs_review": .object(["noul": .number(0.9)])]))
+        let out = Journey.run(task: "reescrever o parser de argumentos", journeyId: "J-R", workspace: "/tmp", client: fake, gate: g, available: [.claude_opus]) { _, _, _, _, _ in XCTFail("must not run"); return .failure(JevError("x")) }
+        XCTAssertTrue(out.hasSuffix("outcome: needs_human_review"), out)
+        let token = out.split(separator: "\n").compactMap { l -> String? in guard let r = l.range(of: "apr_") else { return nil }; return String(l[r.lowerBound...]).split(separator: " ").first.map(String.init) }.first!
+        var runs = 0
+        let ok = Journey.approve(journeyId: "J-R", token: token, task: "reescrever o parser de argumentos", workspace: "/tmp", gate: g) { lane, _, _, _, _ in runs += 1; return self.ok(lane) }
+        XCTAssertTrue(ok.hasSuffix("outcome: completed") && ok.contains("1 approval: valid, consumed"), ok); XCTAssertEqual(runs, 1)
+        let again = Journey.approve(journeyId: "J-R", token: token, task: "reescrever o parser de argumentos", workspace: "/tmp", gate: g) { _, _, _, _, _ in runs += 1; return .failure(JevError("x")) }
+        XCTAssertTrue(again.hasSuffix("outcome: refused_used"), again); XCTAssertEqual(runs, 1)
+        try? FileManager.default.removeItem(atPath: g.statePath)
     }
 }

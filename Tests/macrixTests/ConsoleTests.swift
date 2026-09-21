@@ -19,15 +19,15 @@ final class ConsoleTests: XCTestCase {
               let tools = obj["tools"] as? [[String: String]] else {
             return XCTFail("catalog not parseable JSON")
         }
-        XCTAssertEqual(tools.count, 108)
+        XCTAssertEqual(tools.count, 109)
         XCTAssertTrue(tools.allSatisfy { $0["name"] != nil && $0["description"] != nil })
         let names = tools.compactMap { $0["name"] }
-        XCTAssertEqual(Set(names).count, 108)
+        XCTAssertEqual(Set(names).count, 109)
     }
     func testHundredStill() {
         let r = ToolRegistry()
         registerAllTools(into: r)
-        XCTAssertEqual(r.list().count, 108)
+        XCTAssertEqual(r.list().count, 109)
     }
     func testUsageJSON() {
         let body = Console.usageJSON(fp: "deadbeef", tier: .free)

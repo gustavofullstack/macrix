@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. 108 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 109 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -1086,6 +1086,14 @@ func registerHarnessTools(into registry: ToolRegistry) {
                                        workspace: args["workspace"]?.string ?? "", client: TypeSafeHTTP(key: key), gate: HarnessGate.shared,
                                        available: avail, yolo: (args["yolo"]?.string ?? "false") == "true",
                                        timeout: Double(args["timeout"]?.string ?? "") ?? 300))
+    })
+    registry.register(Tool(
+        name: "journey_approve",
+        description: "Execute a journey that stopped in needs_human_review: needs the journey_id, the single-use token printed by journey_run, and the exact same task text. Production markers stay blocked even with a token. args: journey_id, token, task, workspace?, yolo?, timeout?.",
+        inputSchema: objSchema(["journey_id": "string", "token": "string", "task": "string", "workspace": "string", "yolo": "string", "timeout": "string"], required: ["journey_id", "token", "task"])) { args async in
+        textContent(Journey.approve(journeyId: args["journey_id"]?.string ?? "", token: args["token"]?.string ?? "", task: args["task"]?.string ?? "",
+                                    workspace: args["workspace"]?.string ?? "", gate: HarnessGate.shared, yolo: (args["yolo"]?.string ?? "false") == "true",
+                                    timeout: Double(args["timeout"]?.string ?? "") ?? 300))
     })
     registry.register(Tool(
         name: "agents_gate",
