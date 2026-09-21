@@ -461,4 +461,35 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "catalog_stats",
         description: "Catalog coverage: counts per kind vs the 1000 target.",
         inputSchema: objSchema([:])) { _ async in textContent(Catalog.stats()) })
+
+    // MARK: - v0.8 system family (G1)
+    for (n, d, needArgs) in [
+        ("sys_info", "Hardware + OS summary.", false),
+        ("sys_battery", "Battery status (pmset).", false),
+        ("sys_volume", "Output volume level.", false),
+        ("sys_wifi", "Current Wi-Fi network.", false),
+        ("sys_clipboard", "Clipboard text (first 500 chars).", false),
+        ("sys_procs", "Top CPU processes.", false),
+        ("sys_disk", "Disk usage for /.", false),
+    ] {
+        let name = n, desc = d
+        registry.register(Tool(name: name, description: desc, inputSchema: objSchema([:])) { _ async in
+            switch name {
+            case "sys_info": return textContent(Sys.info())
+            case "sys_battery": return textContent(Sys.battery())
+            case "sys_volume": return textContent(Sys.volume())
+            case "sys_wifi": return textContent(Sys.wifi())
+            case "sys_clipboard": return textContent(Sys.clipboard())
+            case "sys_procs": return textContent(Sys.procs())
+            default: return textContent(Sys.disk())
+            }
+        })
+        _ = needArgs
+    }
+    registry.register(Tool(
+        name: "sys_open",
+        description: "Open an http(s) URL, absolute path, or .app by name. Only opens exactly what is named.",
+        inputSchema: objSchema(["target": "string"], required: ["target"])) { args async in
+        textContent(Sys.openTarget(args["target"]?.string ?? ""))
+    })
 }
