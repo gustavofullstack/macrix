@@ -814,4 +814,43 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
         textContent(Codec.qr(args["text"]?.string ?? ""))
     })
+
+    // MARK: - v0.19 archive + text families (G1)
+    registry.register(Tool(
+        name: "zip_create",
+        description: "Zip up to 20 files into /tmp/<name>.zip.",
+        inputSchema: objSchema(["name": "string", "paths": "string"], required: ["name", "paths"])) { args async in
+        let ps = (args["paths"]?.string ?? "").split(separator: "\n").map(String.init)
+        return textContent(Archive.create(zipName: args["name"]?.string ?? "", paths: ps))
+    })
+    registry.register(Tool(
+        name: "zip_list",
+        description: "List entries of a .zip file.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Archive.list(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "zip_extract",
+        description: "Extract a .zip flat into a fresh /tmp dir (zip-slip safe).",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Archive.extract(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "text_stats",
+        description: "Line/word/byte counts of a text file.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(TextUtil.stats(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "csv_head",
+        description: "First N rows of a CSV file (max 20).",
+        inputSchema: objSchema(["path": "string", "n": "string"], required: ["path"])) { args async in
+        textContent(TextUtil.csvHead(args["path"]?.string ?? "", n: Int(args["n"]?.string ?? "10") ?? 10))
+    })
+    registry.register(Tool(
+        name: "grep_file",
+        description: "Literal case-insensitive search in a text file (max 50 hits).",
+        inputSchema: objSchema(["path": "string", "pattern": "string"], required: ["path", "pattern"])) { args async in
+        textContent(TextUtil.grep(args["path"]?.string ?? "", pattern: args["pattern"]?.string ?? ""))
+    })
 }
