@@ -853,4 +853,30 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["path": "string", "pattern": "string"], required: ["path", "pattern"])) { args async in
         textContent(TextUtil.grep(args["path"]?.string ?? "", pattern: args["pattern"]?.string ?? ""))
     })
+
+    // MARK: - v0.20 media family (G1): sips + afinfo, /tmp outputs only
+    registry.register(Tool(
+        name: "img_info",
+        description: "Image dimensions and format via sips.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Media.imgInfo(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "img_resize",
+        description: "Resize image so the long side is <max> px (16-4096). PNG in /tmp.",
+        inputSchema: objSchema(["path": "string", "max": "string"], required: ["path"])) { args async in
+        textContent(Media.imgResize(args["path"]?.string ?? "", maxSide: Int(args["max"]?.string ?? "512") ?? 512))
+    })
+    registry.register(Tool(
+        name: "img_convert",
+        description: "Convert image to png/jpeg/tiff in /tmp.",
+        inputSchema: objSchema(["path": "string", "format": "string"], required: ["path", "format"])) { args async in
+        textContent(Media.imgConvert(args["path"]?.string ?? "", format: args["format"]?.string ?? "png"))
+    })
+    registry.register(Tool(
+        name: "audio_info",
+        description: "Audio file probe via afinfo (no playback).",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Media.audioInfo(args["path"]?.string ?? ""))
+    })
 }
