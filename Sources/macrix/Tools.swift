@@ -22,7 +22,9 @@ func runProcess(_ path: String, _ args: [String], timeoutSeconds: Double = 30) -
     proc.arguments = args
     let pipe = Pipe()
     proc.standardOutput = pipe
-    proc.standardError = Pipe()
+    // NOTE (fleet review): stderr goes to null, never an unread pipe —
+    // a full pipe would deadlock the child until the deadline kill.
+    proc.standardError = FileHandle.nullDevice
     do {
         try proc.run()
     } catch {
