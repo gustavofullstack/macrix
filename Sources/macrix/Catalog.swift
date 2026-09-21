@@ -41,12 +41,47 @@ public enum Catalog {
     public static func search(_ query: String, limit: Int) -> String {
         guard let doc = load() else { return "catalog unavailable." }
         let q = query.lowercased()
-        let hits = doc.entries.filter {
+        let pool = doc.entries.filter {
             $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q)
                 || $0.kind.lowercased().contains(q)
-        }.prefix(max(1, min(limit, 30)))
-        if hits.isEmpty { return "no catalog entries match '\(query)'." }
-        return hits.map { "- [\($0.kind)] \($0.name) — \(($0.description.isEmpty ? $0.source : $0.description).prefix(120))" }
-            .joined(separator: "\n")
+        }
+        if pool.isEmpty { return "no catalog entries match '\(query)'." }
+        let n = max(1, min(limit, 30))
+        // Jev rerank when available (same noul-scored pattern as jev_route);
+        // plain substring order otherwise. Never fails the call, never drops hits.
+        let ranked: [(Entry, Double?)]? = reranked(pool: Array(pool.prefix(40)), query: query)?
+            .map { ($0.0, $0.1 as Double?) }
+        let ordered: [(Entry, Double?)] = ranked ?? pool.prefix(n).map { ($0, nil) }
+        return ordered.prefix(n).map { e, s in
+            let score = s.map { String(format: " (noul %.2f)", $0) } ?? ""
+            return "- [\(e.kind)] \(e.name)\(score) — \((e.description.isEmpty ? e.source : e.description).prefix(120))"
+        }.joined(separator: "\n")
+    }
+
+    /// Returns entries ordered by Jev noul score, or nil to keep substring order.
+    static func reranked(pool: [Entry], query: String) -> [(Entry, Double)]? {
+        guard Jev.enabled(), pool.count > 1 else { return nil }
+        let docs = pool.map { "\($0.name): \($0.description.isEmpty ? $0.source : $0.description)" }
+        var scored: [(String, Double)] = []
+        for chunk in docs.chunked(20) {
+            var cmd = ["rerank", query]
+            cmd.append(contentsOf: chunk)
+            let (code, out) = Jev.runShell(Jev.helper(), args: cmd, timeoutSeconds: 60)
+            guard code == 0 else { return nil }
+            scored.append(contentsOf: Jev.parseRerank(out))
+        }
+        guard !scored.isEmpty else { return nil }
+        var byName: [String: Double] = [:]
+        for (name, score) in scored { byName[name] = max(byName[name] ?? 0, score) }
+        // parseRerank keys on text before the first ":"; names like
+        // "opencode:playwright" match via their prefix. Ties keep pool order
+        // (stable sort), so no hit is ever lost to reranking.
+        let out = pool.compactMap { e -> (Entry, Double)? in
+            let s = byName[e.name] ?? byName[String(e.name.prefix(while: { $0 != ":" }))]
+            return s.map { (e, $0) }
+        }
+        // Never drop hits: if Jev didn't echo every name, keep substring order.
+        guard out.count == pool.count else { return nil }
+        return out.sorted { $0.1 > $1.1 }
     }
 }

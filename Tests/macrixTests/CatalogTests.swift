@@ -16,4 +16,11 @@ final class CatalogTests: XCTestCase {
         XCTAssertTrue(Catalog.search("macrix", limit: 5).contains("macrix-tool"))
         XCTAssertTrue(Catalog.search("zzz-no-such-capability", limit: 5).contains("no catalog entries"))
     }
+    func testSearchSubstringFallback() {
+        // Jev off: same hits, no scores, nothing dropped.
+        unsetenv("MACRIX_JEV")
+        let out = Catalog.search("macrix", limit: 5)
+        XCTAssertFalse(out.contains("noul"))
+        XCTAssertEqual(out.split(separator: "\n").count, 5)
+    }
 }
