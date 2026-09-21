@@ -879,4 +879,34 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
         textContent(Media.audioInfo(args["path"]?.string ?? ""))
     })
+
+    // MARK: - v0.21 probe family (G1): uptime/mem/ports/md/plist/launchd
+    registry.register(Tool(
+        name: "sys_uptime",
+        description: "Uptime and load averages.",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.uptime()) })
+    registry.register(Tool(
+        name: "sys_mem",
+        description: "macOS virtual-memory summary (vm_stat).",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.mem()) })
+    registry.register(Tool(
+        name: "net_ports",
+        description: "Listening TCP ports (lsof).",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.ports()) })
+    registry.register(Tool(
+        name: "md_headings",
+        description: "Extract # headings from a markdown file.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Probe.headings(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "plist_read",
+        description: "Dump a plist file (plutil -p). Secret paths refused.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Probe.plist(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "launchd_list",
+        description: "User launchd jobs (first 40 lines).",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.launchd()) })
 }
