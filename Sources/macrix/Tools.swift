@@ -440,4 +440,9 @@ public func registerAllTools(into registry: ToolRegistry) {
         // Per-key self-report lands in v0.4.
         textContent("tiers free(1k/d) starter$20(10k/d) growth$50(50k/d) scale$100(200k/d) max$200(unlimited) lifetime(unlimited) — now: \(License.current().tier.rawValue)")
     })
+
+    registry.register(Tool(
+        name: "providers_usage",
+        description: "Per-provider local activity: sessions, events, bytes, recency (codex/claude/muse/cursor/antigravity/opencode/gemini). Counts only, no content.",
+        inputSchema: objSchema([:])) { _ async in textContent(Providers.report()) })
 }
