@@ -1,0 +1,32 @@
+import XCTest
+@testable import macrix
+
+final class ConsoleTests: XCTestCase {
+    func testHtml() {
+        let page = Console.html(version: "0.23.0", tier: "lifetime", tools: 100, requests: 7, uptime: 3723)
+        XCTAssertTrue(page.contains("macrix"))
+        XCTAssertTrue(page.contains("0.23.0"))
+        XCTAssertTrue(page.contains("100"))
+        XCTAssertTrue(page.contains("1h 2m 3s"))
+        XCTAssertFalse(page.contains("mcp_"))
+    }
+    func testCatalog() {
+        let r = ToolRegistry()
+        registerAllTools(into: r)
+        let body = Console.catalog(r.list())
+        guard let data = body.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tools = obj["tools"] as? [[String: String]] else {
+            return XCTFail("catalog not parseable JSON")
+        }
+        XCTAssertEqual(tools.count, 100)
+        XCTAssertTrue(tools.allSatisfy { $0["name"] != nil && $0["description"] != nil })
+        let names = tools.compactMap { $0["name"] }
+        XCTAssertEqual(Set(names).count, 100)
+    }
+    func testHundredStill() {
+        let r = ToolRegistry()
+        registerAllTools(into: r)
+        XCTAssertEqual(r.list().count, 100)
+    }
+}

@@ -14,6 +14,8 @@ public final class HTTPServer: @unchecked Sendable {
 
     public var totalRequests: Int { statsLock.withLock { _totalRequests } }
 
+    private let startedAt = Date()
+
     public init(port: UInt16, registry: ToolRegistry, keys: Set<String>) throws {
         self.port = port
         self.registry = registry
@@ -51,6 +53,18 @@ public final class HTTPServer: @unchecked Sendable {
         bump()
         if req.method == "GET", req.path == "/health" {
             let body = "{\"status\":\"ok\",\"server\":\"\(mcpServerName)\",\"version\":\"\(mcpServerVersion)\",\"requests\":\(totalRequests),\"tier\":\"\(License.current().tier.rawValue)\"}"
+            send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
+            return
+        }
+        if req.method == "GET", req.path == "/" {
+            let up = Int(Date().timeIntervalSince(startedAt))
+            let page = Console.html(version: mcpServerVersion, tier: License.current().tier.rawValue,
+                                    tools: registry.list().count, requests: totalRequests, uptime: up)
+            send(connection: connection, status: "200 OK", headers: ["Content-Type": "text/html; charset=utf-8"], body: Data(page.utf8))
+            return
+        }
+        if req.method == "GET", req.path == "/catalog" {
+            let body = Console.catalog(registry.list())
             send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
             return
         }
