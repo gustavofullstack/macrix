@@ -16,8 +16,11 @@ public final class HTTPServer: @unchecked Sendable {
 
     private let startedAt = Date()
 
-    public init(port: UInt16, registry: ToolRegistry, keys: Set<String>) throws {
+    /// showcase = the listener the tunnel points at: read-only public surface no matter what headers say.
+    public let showcase: Bool
+    public init(port: UInt16, registry: ToolRegistry, keys: Set<String>, showcase: Bool = false) throws {
         self.port = port
+        self.showcase = showcase
         self.registry = registry
         self.keys = keys
         let params = NWParameters.tcp
@@ -59,7 +62,7 @@ public final class HTTPServer: @unchecked Sendable {
         if let origin = req.headers["origin"], !HTTPPolicy.originAllowed(origin, port: port) {
             send(connection: connection, status: "403 Forbidden", headers: [:], body: Data("origin not allowed".utf8)); return
         }
-        let isPublic = HTTPPolicy.isPublic(headers: req.headers)
+        let isPublic = showcase || HTTPPolicy.isPublic(headers: req.headers)
         if req.method == "GET", req.path == "/health" {
             let body = "{\"status\":\"ok\",\"server\":\"\(mcpServerName)\",\"version\":\"\(mcpServerVersion)\",\"requests\":\(totalRequests),\"tier\":\"\(License.current().tier.rawValue)\"}"
             send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
@@ -228,9 +231,10 @@ struct HTTPRequest {
 /// (agents, journeys, voice, files, computer-use, writers) need the local endpoint.
 public enum HTTPPolicy {
     public static let maxBody = 1 << 20
-    public static let publicPrefixes = ["catalog_", "jev_", "agents_list", "agents_gate", "usage_status", "time_now", "meta_", "health"]
+    /// Exact allowlist. Nothing here reveals local paths, balances or keys, and nothing spends.
+    public static let publicTools: Set<String> = ["catalog_search", "catalog_stats", "jev_ping", "jev_models", "time_now"]
     public static func isPublic(headers: [String: String]) -> Bool { headers["cf-connecting-ip"] != nil || headers["cf-ray"] != nil }
-    public static func publicTool(_ name: String) -> Bool { publicPrefixes.contains { name.hasPrefix($0) } }
+    public static func publicTool(_ name: String) -> Bool { publicTools.contains(name) }
     public static func originAllowed(_ origin: String, port: UInt16) -> Bool {
         let o = origin.lowercased().trimmingCharacters(in: .whitespaces)
         if o == "null" { return false }

@@ -1,5 +1,15 @@
 import Foundation
 
+/// All MACRIX state lives under one directory. `MACRIX_HOME` overrides it so a
+/// disposable instance (proofs, tests) never touches the real ledger or keys.
+public enum MacrixPaths {
+    public static var home: String {
+        if let h = ProcessInfo.processInfo.environment["MACRIX_HOME"], h.hasPrefix("/") { return h }
+        return (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix")
+    }
+    public static let vault = (NSHomeDirectory() as NSString).appendingPathComponent(".config/frota")
+}
+
 /// MACRIX as the local harness: the coding CLIs installed on this Mac become
 /// tools, and Jev picks which one a task deserves.
 ///
@@ -76,6 +86,18 @@ public enum Harness {
         return [h + "/.local/bin", h + "/.opencode/bin", h + "/.bun/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
     }()
 
+    /// macOS seatbelt profile for lanes: they may do anything a user process may,
+    /// EXCEPT read or write MACRIX state (approvals, keys, ledger) and the station vault.
+    /// So a lane cannot read an approval token and approve itself. Off only with MACRIX_NO_SANDBOX=1.
+    public static func sandboxProfile(home: String = MacrixPaths.home, vault: String = MacrixPaths.vault) -> String {
+        "(version 1)(allow default)(deny file-read* (subpath \"\(home)\"))(deny file-write* (subpath \"\(home)\"))(deny file-read* (subpath \"\(vault)\"))(deny file-write* (subpath \"\(vault)\"))"
+    }
+    public static let sandboxExec = "/usr/bin/sandbox-exec"
+    public static func sandboxed(_ bin: String, _ argv: [String]) -> (String, [String]) {
+        if ProcessInfo.processInfo.environment["MACRIX_NO_SANDBOX"] == "1" || !FileManager.default.isExecutableFile(atPath: sandboxExec) { return (bin, argv) }
+        return (sandboxExec, ["-p", sandboxProfile(), bin] + argv)
+    }
+
     public static func resolve(_ agent: Agent) -> String? {
         for dir in searchPath {
             let p = dir + "/" + agent.binary
@@ -138,9 +160,10 @@ public enum Harness {
         guard let bin = resolve(agent) else { return .failure(JevError("\(agent.rawValue): binary \(agent.binary) not installed")) }
         guard let cwd = allowedWorkspace(workspace) else { return .failure(JevError("workspace refused: \(workspace) (allowed: ~/Projetos, ~/Documents, /tmp)")) }
         let argv = agent.argv(prompt: p, model: model, yolo: yolo)
+        let (exe, fullArgv) = sandboxed(bin, argv)
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: bin)
-        proc.arguments = argv
+        proc.executableURL = URL(fileURLWithPath: exe)
+        proc.arguments = fullArgv
         proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = searchPath.joined(separator: ":")
@@ -390,7 +413,7 @@ extension JSONValue {
 /// subscriptions); what is metered is attempts, seconds and outcome, per lane,
 /// so a lane that answers 429 stops being called and duplicates never run twice.
 public final class HarnessGate: @unchecked Sendable {
-    public static let shared = HarnessGate(ledgerPath: (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix/agent-ledger.jsonl"))
+    public static let shared = HarnessGate(ledgerPath: MacrixPaths.home + "/agent-ledger.jsonl")
     private let lock = NSLock()
     private var running = 0
     private var seen: [String: Date] = [:]                 // op_id → first seen
@@ -421,7 +444,7 @@ public final class HarnessGate: @unchecked Sendable {
     public static func manifest(task: String, workspace: String, yolo: Bool, timeout: Double, lane: Harness.Agent) -> String {
         Codec.sha256([task.trimmingCharacters(in: .whitespacesAndNewlines), workspace, yolo ? "yolo" : "safe", String(Int(timeout)), lane.rawValue].joined(separator: "\u{1F}"))
     }
-    public static var approvalsDir: String { (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix/approvals") }
+    public static var approvalsDir: String { MacrixPaths.home + "/approvals" }
 
     /// `ledgerConfig` nil = accounting off (tests and ad-hoc gates never touch the real ledger).
     public init(ledgerPath: String, ledgerConfig: String? = LedgerBridge.configPath) {
@@ -444,6 +467,7 @@ public final class HarnessGate: @unchecked Sendable {
         if !orphans.isEmpty { return .orphan(orphans.count) }
         if running >= maxConcurrent { return .busy(running) }
         let key = opId?.isEmpty == false ? opId! : UUID().uuidString
+        if case .failure(let e) = ledgerLoad { return .storage("ledger misconfigured: \(e) — fix \(MacrixPaths.home)/ledger.json or remove it") }
         if let l = ledger {
             // reserve → dispatch before the process exists; a frozen account refuses
             _ = l.openAccount()
@@ -495,20 +519,22 @@ public final class HarnessGate: @unchecked Sendable {
         }
         // ChatGPT review (21/09): exit 0 proves execution, never cost. Cost stays
         // "unknown" until something reconciles it against the provider's meter.
-        var costStatus = "unknown"; var ledgerNote = "off"
+        // Money and attempts never mix: cost_status is ALWAYS unknown for CLIs (no provider
+        // meter); attempts_status is what the canonical ledger recorded for the attempt account.
+        var attemptsStatus = "off"
         if let l = ledger, ledgerNotes[key] != nil {
             let r: Result<LedgerBridge.Balance, JevError>
             switch status {
-            case "settled", "quota": r = l.settle(key); costStatus = r.isOk ? "attempt_units_settled" : "unknown"
-            case "unknown": r = l.markUnknown(key)            // hold preserved, account frozen until review
-            default: r = l.cancel(key)
+            case "settled", "quota": r = l.settle(key); attemptsStatus = r.isOk ? "settled" : "ledger_error:\(r.error?.message ?? "?")"
+            case "unknown": r = l.markUnknown(key); attemptsStatus = r.isOk ? "unknown_frozen" : "ledger_error:\(r.error?.message ?? "?")"   // hold preserved, account frozen
+            default: r = l.cancel(key); attemptsStatus = r.isOk ? "cancelled" : "ledger_error:\(r.error?.message ?? "?")"
             }
-            ledgerNote = r.isOk ? "ok" : (try? r.get()) == nil ? "error:\((r.error?.message ?? "?"))" : "ok"
             ledgerNotes[key] = nil
         }
         let line: [String: JSONValue] = ["ts": .string(ISO8601DateFormatter().string(from: now)), "lane": .string(lane.rawValue),
             "op_id": .string(opId ?? ""), "seconds": .number((seconds * 10).rounded() / 10), "exit": .number(Double(exit)),
-            "execution_status": .string(status), "cost_status": .string(costStatus), "ledger": .string(ledgerNote)]
+            "execution_status": .string(status), "cost_status": .string("unknown"), "attempts_status": .string(attemptsStatus),
+            "server_pid": .number(Double(getpid())), "build": .string(mcpServerVersion)]
         if let d = try? JSONEncoder().encode(JSONValue.object(line)), let s = String(data: d, encoding: .utf8) {
             let dir = (ledgerPath as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -529,7 +555,7 @@ public final class HarnessGate: @unchecked Sendable {
         let s = suspended.filter { $0.value > now }.map { "\($0.key.rawValue) until \(ISO8601DateFormatter().string(from: $0.value))" }.sorted()
         var bal = ""
         if let l = ledger, case .success(let b) = l.balance() { bal = " · account cap \(b.cap) held \(b.held) spent \(b.spent)\(b.frozen ? " FROZEN" : "")" }
-        return "running \(running)/\(maxConcurrent) · suspended: \(s.isEmpty ? "none" : s.joined(separator: ", "))\(orphans.isEmpty ? "" : " · ORPHANS \(orphans)") · attempts \(ledgerPath) · \(LedgerBridge.describe(ledgerLoad))\(bal)"
+        return "pid \(getpid()) · build \(mcpServerVersion) · exe \(CommandLine.arguments.first ?? "?") · running \(running)/\(maxConcurrent) · suspended: \(s.isEmpty ? "none" : s.joined(separator: ", "))\(orphans.isEmpty ? "" : " · ORPHANS \(orphans)") · attempts \(ledgerPath) · \(LedgerBridge.describe(ledgerLoad))\(bal)"
     }
 
     /// Test hook.

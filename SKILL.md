@@ -1,6 +1,6 @@
 ---
 name: macrix
-description: macOS automation MCP server (109 tools; public tunnel is a read-only showcase, operational tools only on 127.0.0.1) with concurrent multi-agent access. Use when the user needs calendar, reminders, notes, shortcuts, files, git, web screenshots, system probes, or Jev/TypeSafe judgments without the 100-calls/day commercial cap.
+description: macOS automation MCP server (109 tools; public tunnel hits a separate read-only showcase listener :35731 with 5 tools; operational tools only on 127.0.0.1:35730; lanes run under sandbox-exec denying MACRIX_HOME and the vault) with concurrent multi-agent access. Use when the user needs calendar, reminders, notes, shortcuts, files, git, web screenshots, system probes, or Jev/TypeSafe judgments without the 100-calls/day commercial cap.
 ---
 
 # macrix skill

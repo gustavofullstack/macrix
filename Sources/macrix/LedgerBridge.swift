@@ -16,7 +16,7 @@ public struct LedgerBridge: Sendable {
     public let tenant: String, cap: Int, attemptUnits: Int
     public static let priceVersion = "attempt-units-v0"
 
-    public static var configPath: String { (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix/ledger.json") }
+    public static var configPath: String { MacrixPaths.home + "/ledger.json" }
 
     public enum LoadError: Error, Equatable { case noConfig, badConfig(String), pythonTooOld(String), missing(String) }
 
@@ -32,8 +32,13 @@ public struct LedgerBridge: Sendable {
         let ver = out.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = ver.split(separator: ".").compactMap { Int($0) }
         guard code == 0, parts.count == 2, (parts[0], parts[1]) >= (3, 11) else { return .failure(.pythonTooOld(ver.isEmpty ? "unknown" : ver)) }
-        return .success(LedgerBridge(python: py, bridge: br, database: db, tenant: v["tenant"]?.string ?? "macrix-cli",
-                                     cap: v["cap"]?.int ?? 1_000_000, attemptUnits: v["attempt_units"]?.int ?? 1000))
+        // The account is an ATTEMPT account: its "nano_usd" column carries attempt units, so
+        // the tenant name says so and can never be confused with a money tenant.
+        let tenant = v["tenant"]?.string ?? "macrix-cli-attempts"
+        guard tenant.hasSuffix("-attempts") else { return .failure(.badConfig("tenant must end in -attempts (units, not money): \(tenant)")) }
+        let units = v["attempt_units"]?.int ?? 1000
+        guard units > 0, units <= 1_000_000 else { return .failure(.badConfig("attempt_units out of range")) }
+        return .success(LedgerBridge(python: py, bridge: br, database: db, tenant: tenant, cap: v["cap"]?.int ?? 1_000_000, attemptUnits: units))
     }
 
     public struct Balance: Equatable, Sendable { public var cap: Int, held: Int, spent: Int, remaining: Int, frozen: Bool, overBudget: Bool }
@@ -44,8 +49,10 @@ public struct LedgerBridge: Sendable {
         let (code, out) = runProcess(python, ["-S", bridge, "--database", database], timeoutSeconds: 20, stdin: s)
         guard let d = out.data(using: .utf8), let v = try? JSONDecoder().decode(JSONValue.self, from: d) else { return .failure(JevError(code == 0 ? "INVALID_LEDGER_RESPONSE" : "LEDGER_UNAVAILABLE")) }
         guard v["ok"]?.bool == true, let b = v["balance"] else { return .failure(JevError(v["code"]?.string ?? "LEDGER_ERROR")) }
-        return .success(Balance(cap: b["cap"]?.int ?? 0, held: b["held"]?.int ?? 0, spent: b["spent"]?.int ?? 0, remaining: b["remaining"]?.int ?? 0,
-                                frozen: b["frozen"]?.bool ?? false, overBudget: b["over_budget"]?.bool ?? false))
+        // strict: a missing field is an error, never a zero balance
+        guard let cap = b["cap"]?.int, let held = b["held"]?.int, let spent = b["spent"]?.int, let rem = b["remaining"]?.int,
+              let frozen = b["frozen"]?.bool, let over = b["over_budget"]?.bool else { return .failure(JevError("INCOMPLETE_BALANCE")) }
+        return .success(Balance(cap: cap, held: held, spent: spent, remaining: rem, frozen: frozen, overBudget: over))
     }
 
     func t(_ action: String, _ extra: [String: JSONValue] = [:]) -> [String: JSONValue] {
@@ -67,7 +74,7 @@ public struct LedgerBridge: Sendable {
 
     public static func describe(_ r: Result<LedgerBridge?, LoadError>) -> String {
         switch r {
-        case .success(nil): return "ledger: off (no ~/.config/macrix/ledger.json)"
+        case .success(nil): return "ledger: off (no \(MacrixPaths.home)/ledger.json)"
         case .success(let b?): return "ledger: on · tenant \(b.tenant) · \(b.attemptUnits) units/attempt · \(b.database)"
         case .failure(let e): return "ledger: misconfigured (\(e))"
         }

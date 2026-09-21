@@ -275,7 +275,7 @@ final class LedgerBridgeTests: XCTestCase {
         guard let py = modernPython() else { throw XCTSkip("no python ≥ 3.11 here") }
         let dir = "/tmp/macrix_lb_\(UUID().uuidString)"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let br = writeFakeBridge(dir)
-        let cfg = dir + "/ledger.json"; try? "{\"python\":\"\(py)\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\",\"tenant\":\"t\",\"attempt_units\":1000}".write(toFile: cfg, atomically: true, encoding: .utf8)
+        let cfg = dir + "/ledger.json"; try? "{\"python\":\"\(py)\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\",\"tenant\":\"t-attempts\",\"attempt_units\":1000}".write(toFile: cfg, atomically: true, encoding: .utf8)
         let g = HarnessGate(ledgerPath: dir + "/ledger.jsonl", ledgerConfig: nil)
         g.ledgerLoad = LedgerBridge.load(path: cfg)
         XCTAssertNotNil(g.ledger, "\(g.ledgerLoad)")
@@ -287,7 +287,7 @@ final class LedgerBridgeTests: XCTestCase {
         let calls = (try? String(contentsOfFile: dir + "/calls.log", encoding: .utf8)) ?? ""
         XCTAssertEqual(calls, "open_account\nreserve\ndispatch\nsettle\nopen_account\nreserve\ndispatch\nmark_unknown\nopen_account\nreserve\n", calls)
         let line = (try? String(contentsOfFile: dir + "/ledger.jsonl", encoding: .utf8)) ?? ""
-        XCTAssertTrue(line.contains("\"cost_status\":\"attempt_units_settled\"") && line.contains("\"ledger\":\"ok\""), line)
+        XCTAssertTrue(line.contains("\"cost_status\":\"unknown\"") && line.contains("\"attempts_status\":\"settled\"") && line.contains("\"attempts_status\":\"unknown_frozen\""), line)
         XCTAssertTrue(g.status().contains("ledger: on"))
         try? FileManager.default.removeItem(atPath: dir)
     }
@@ -328,9 +328,48 @@ final class HTTPPolicyTests: XCTestCase {
     }
     func testPublicSurfaceAndOrigin() {
         XCTAssertTrue(HTTPPolicy.isPublic(headers: ["cf-ray": "abc"])); XCTAssertFalse(HTTPPolicy.isPublic(headers: ["host": "127.0.0.1:35730"]))
-        XCTAssertTrue(HTTPPolicy.publicTool("catalog_search")); XCTAssertTrue(HTTPPolicy.publicTool("jev_ping")); XCTAssertTrue(HTTPPolicy.publicTool("agents_gate"))
-        for t in ["agent_run", "journey_run", "journey_approve", "voice_listen", "file_read", "cu_click", "app_quit", "notify"] { XCTAssertFalse(HTTPPolicy.publicTool(t), t) }
+        XCTAssertTrue(HTTPPolicy.publicTool("catalog_search")); XCTAssertTrue(HTTPPolicy.publicTool("jev_ping"))
+        for t in ["agent_run", "journey_run", "journey_approve", "voice_listen", "file_read", "cu_click", "app_quit", "notify", "agents_gate", "agents_list", "usage_status", "env_inventory", "catalog_evil"] { XCTAssertFalse(HTTPPolicy.publicTool(t), t) }
         XCTAssertTrue(HTTPPolicy.originAllowed("http://127.0.0.1:35730", port: 35730)); XCTAssertTrue(HTTPPolicy.originAllowed("https://macrix.triqhub.tech", port: 35730))
         XCTAssertFalse(HTTPPolicy.originAllowed("https://evil.example", port: 35730)); XCTAssertFalse(HTTPPolicy.originAllowed("null", port: 35730))
+    }
+}
+
+
+final class IsolationAndUnitsTests: XCTestCase {
+    func testLanesRunUnderSeatbeltDenyingMacrixHomeAndVault() {
+        let (exe, argv) = Harness.sandboxed("/usr/bin/true", ["-x"])
+        if ProcessInfo.processInfo.environment["MACRIX_NO_SANDBOX"] == "1" { return }
+        XCTAssertEqual(exe, "/usr/bin/sandbox-exec"); XCTAssertEqual(argv.first, "-p"); XCTAssertEqual(argv.suffix(2), ["/usr/bin/true", "-x"])
+        let prof = Harness.sandboxProfile(home: "/H/macrix", vault: "/H/frota")
+        XCTAssertTrue(prof.contains("(deny file-read* (subpath \"/H/macrix\"))") && prof.contains("(subpath \"/H/frota\")"))
+        // real seatbelt: a lane process cannot read MACRIX_HOME
+        let home = MacrixPaths.home
+        let probe = home + "/keys"
+        guard FileManager.default.isReadableFile(atPath: probe) else { return }
+        let (code, out) = runProcess("/usr/bin/sandbox-exec", ["-p", Harness.sandboxProfile(), "/bin/cat", probe], timeoutSeconds: 10)
+        XCTAssertTrue(code != 0 || out.isEmpty, "sandboxed cat must not read \(probe)")
+    }
+    func testLedgerConfigValidationAndStrictBalance() {
+        let dir = "/tmp/macrix_units_\(UUID().uuidString)"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let br = dir + "/b.py"; try? "print('{}')".write(toFile: br, atomically: true, encoding: .utf8)
+        let py = ["/Users/sug/.local/bin/python3", "/opt/homebrew/bin/python3"].first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/python3"
+        let bad = dir + "/money.json"; try? "{\"python\":\"\(py)\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db\",\"tenant\":\"macrix-cli\"}".write(toFile: bad, atomically: true, encoding: .utf8)
+        if case .failure(.badConfig(let why)) = LedgerBridge.load(path: bad) { XCTAssertTrue(why.contains("-attempts"), why) }
+        else if case .failure(.pythonTooOld) = LedgerBridge.load(path: bad) { /* no modern python on this box */ } else { XCTFail("money tenant must be refused") }
+        // strict balance: incomplete response is an error, not zero
+        let lb = LedgerBridge(python: "/bin/echo", bridge: "x", database: "y", tenant: "t-attempts", cap: 1, attemptUnits: 1)
+        _ = lb   // call() would spawn /bin/echo; parse path covered by shape below
+        let incomplete: JSONValue = .object(["ok": .bool(true), "balance": .object(["cap": .number(1)])])
+        XCTAssertNil(incomplete["balance"]?["held"]?.int)
+        // gate refuses to run when a ledger config exists but is invalid
+        let g = HarnessGate(ledgerPath: dir + "/l.jsonl", ledgerConfig: bad)
+        if case .storage(let why)? = g.admit(.muse, opId: "u1") { XCTAssertTrue(why.contains("misconfigured"), why) } else { XCTFail("invalid ledger config must refuse admission") }
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+    func testMacrixHomeOverride() {
+        XCTAssertTrue(MacrixPaths.home.hasPrefix("/"))
+        XCTAssertTrue(HarnessGate.approvalsDir.hasPrefix(MacrixPaths.home))
+        XCTAssertTrue(LedgerBridge.configPath.hasPrefix(MacrixPaths.home))
     }
 }

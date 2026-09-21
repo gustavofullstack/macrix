@@ -5,7 +5,8 @@ func printUsage() {
     macrix \(mcpServerVersion) — open macOS-automation MCP server.
     No daily limits. Concurrent clients allowed.
     Usage:
-      macrix serve [--port N]     Start the MCP server (default port 35730)
+      macrix serve [--port N] [--public-port M | --no-public]
+                                  MCP server on 127.0.0.1:N (default 35730) + read-only showcase on M (default 35731)
       macrix keys                 Print where API keys are loaded from
       macrix version              Print version
       macrix voice [--seconds N] [--locale pt-BR] [--dry-run]
@@ -29,10 +30,13 @@ case "keys":
     print("configured keys: \(Auth.loadKeys().count)")
 case "serve":
     var port: UInt16 = 35730
+    var publicPort: UInt16? = 35731
     let rest = Array(args.dropFirst())
     if let i = rest.firstIndex(of: "--port"), i + 1 < rest.count, let p = UInt16(rest[i + 1]) {
         port = p
     }
+    if let i = rest.firstIndex(of: "--public-port"), i + 1 < rest.count { publicPort = UInt16(rest[i + 1]) }
+    if rest.contains("--no-public") { publicPort = nil }
     let keys = Auth.loadKeys()
     if keys.isEmpty {
         fputs("macrix: no API keys configured (MACRIX_KEYS or ~/.config/macrix/keys). Refusing to start unauthenticated.\n", stderr)
@@ -47,7 +51,14 @@ case "serve":
             fputs("macrix: failed to bind port \(port).\n", stderr)
             exit(1)
         }
-        print("macrix \(mcpServerVersion) serving MCP on 127.0.0.1:\(port)/mcp (\(registry.list().count) tools, \(keys.count) key(s))")
+        var showcaseNote = "no showcase listener"
+        if let pp = publicPort {
+            let show = try HTTPServer(port: pp, registry: registry, keys: keys, showcase: true)
+            show.start()
+            showcaseNote = show.waitReady() ? "showcase (read-only, for the tunnel) on 127.0.0.1:\(pp)" : "showcase failed to bind \(pp)"
+            _ = Unmanaged.passRetained(show)   // lives for the process lifetime
+        }
+        print("macrix \(mcpServerVersion) serving MCP on 127.0.0.1:\(port)/mcp (\(registry.list().count) tools, \(keys.count) key(s)) · \(showcaseNote) · pid \(getpid())")
         fflush(stdout)
         signal(SIGINT, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)

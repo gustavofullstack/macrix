@@ -31,7 +31,7 @@ public enum Auth {
                 }
             }
         }
-        for dotfile in ["~/.config/macrix/keys", "~/.config/macuse-open/keys"] {
+        for dotfile in [MacrixPaths.home + "/keys", "~/.config/macuse-open/keys"] {
             let path = (dotfile as NSString).expandingTildeInPath
             if let content = try? String(contentsOfFile: path, encoding: .utf8) {
                 for line in content.components(separatedBy: .newlines) {

@@ -43,7 +43,7 @@ public enum License {
     }
 
     static var dir: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent(".config/macrix")
+        MacrixPaths.home
     }
     static var licensePath: String { (dir as NSString).appendingPathComponent("license") }
     /// Overridable so tests never touch production metering:
