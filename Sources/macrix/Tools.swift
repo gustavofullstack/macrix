@@ -611,4 +611,24 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "jev_ping",
         description: "Check the local Jev/TypeSafe brain is reachable.",
         inputSchema: objSchema([:])) { _ async in textContent(Jev.ping()) })
+
+    // MARK: - v0.12 files family (G1): scoped read/write/list
+    registry.register(Tool(
+        name: "file_read",
+        description: "Read a UTF-8 text file (max 100KB). Secret-adjacent paths refused.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Files.read(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "file_write",
+        description: "Write text to a bare filename inside /tmp only (max 100KB).",
+        inputSchema: objSchema(["name": "string", "content": "string"], required: ["name", "content"])) { args async in
+        textContent(Files.write(name: args["name"]?.string ?? "", content: args["content"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "file_list",
+        description: "List /tmp or PROJETOS subtrees (max 50 entries).",
+        inputSchema: objSchema(["dir": "string"], required: ["dir"])) { args async in
+        textContent(Files.list(args["dir"]?.string ?? ""))
+    })
 }
