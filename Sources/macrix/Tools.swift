@@ -631,4 +631,28 @@ public func registerAllTools(into registry: ToolRegistry) {
         inputSchema: objSchema(["dir": "string"], required: ["dir"])) { args async in
         textContent(Files.list(args["dir"]?.string ?? ""))
     })
+
+    // MARK: - v0.13 net family (G1) + clipboard write
+    registry.register(Tool(
+        name: "net_dns",
+        description: "Resolve a hostname to addresses (getaddrinfo).",
+        inputSchema: objSchema(["host": "string"], required: ["host"])) { args async in
+        textContent(Net.dns(args["host"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "net_ping",
+        description: "2-packet ping summary (loss + round-trip).",
+        inputSchema: objSchema(["host": "string"], required: ["host"])) { args async in
+        textContent(Net.ping(args["host"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "net_ip",
+        description: "Local IPv4 addresses per interface.",
+        inputSchema: objSchema([:])) { _ async in textContent(Net.ips()) })
+    registry.register(Tool(
+        name: "clipboard_write",
+        description: "Set clipboard text (max 100KB).",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Net.clipWrite(args["text"]?.string ?? ""))
+    })
 }
