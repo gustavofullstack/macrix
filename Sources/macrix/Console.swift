@@ -34,13 +34,29 @@ public enum Console {
         }
         return "{\"tools\":[\(items.joined(separator: ","))]}"
     }
+
+    /// Authenticated per-key metering snapshot (backs GET /usage).
+    static func usageJSON(fp: String, tier: License.Tier) -> String {
+        let day = Usage.load()
+        let per = day.keys[fp] ?? [:]
+        let total = per.values.reduce(0, +)
+        let quota = tier.dailyQuota.map(String.init) ?? "unlimited"
+        let top = per.sorted { $0.value > $1.value }.prefix(10).map {
+            "\"\($0.key.jsonQuotedNoQuotes)\":\($0.value)"
+        }.joined(separator: ",")
+        return "{\"date\":\(day.date.jsonQuoted),\"tier\":\(tier.rawValue.jsonQuoted),\"used_today\":\(total),\"quota\":\"\(quota)\",\"by_tool\":{\(top)}}"
+    }
 }
 
-private extension String {
+extension String {
     var jsonQuoted: String {
         let e = self.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
         return "\"\(e)\""
+    }
+    var jsonQuotedNoQuotes: String {
+        self.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }

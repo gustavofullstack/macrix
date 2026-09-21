@@ -29,4 +29,17 @@ final class ConsoleTests: XCTestCase {
         registerAllTools(into: r)
         XCTAssertEqual(r.list().count, 100)
     }
+    func testUsageJSON() {
+        let body = Console.usageJSON(fp: "deadbeef", tier: .free)
+        guard let data = body.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return XCTFail("usage not parseable JSON")
+        }
+        XCTAssertEqual(obj["tier"] as? String, "free")
+        XCTAssertEqual(obj["quota"] as? String, "1000")
+        XCTAssertNotNil(obj["used_today"])
+        XCTAssertNotNil(obj["by_tool"])
+        let life = Console.usageJSON(fp: "x", tier: .lifetime)
+        XCTAssertTrue(life.contains("\"unlimited\""))
+    }
 }

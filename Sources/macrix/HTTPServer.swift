@@ -68,6 +68,16 @@ public final class HTTPServer: @unchecked Sendable {
             send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
             return
         }
+        if req.method == "GET", req.path == "/usage" {
+            guard let token = Auth.token(from: req.headers["authorization"]), keys.contains(token) else {
+                send(connection: connection, status: "401 Unauthorized", headers: [:], body: Data())
+                return
+            }
+            let tier = License.current().tier
+            let body = Console.usageJSON(fp: License.fingerprint(token), tier: tier)
+            send(connection: connection, status: "200 OK", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
+            return
+        }
         guard req.method == "POST", req.path == "/mcp" else {
             send(connection: connection, status: "404 Not Found", headers: [:], body: Data())
             return
