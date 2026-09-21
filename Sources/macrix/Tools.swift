@@ -445,4 +445,9 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "providers_usage",
         description: "Per-provider local activity: sessions, events, bytes, recency (codex/claude/muse/cursor/antigravity/opencode/gemini). Counts only, no content.",
         inputSchema: objSchema([:])) { _ async in textContent(Providers.report()) })
+
+    registry.register(Tool(
+        name: "providers_spend",
+        description: "Measured tokens per provider (muse) with n/a reasons elsewhere; USD only from ~/.config/macrix/rates.json.",
+        inputSchema: objSchema([:])) { _ async in textContent(Spend.report()) })
 }
