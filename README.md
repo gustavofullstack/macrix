@@ -1,6 +1,6 @@
 # macrix
 
-Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.27.0: 107 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
+Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.28.0: 107 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
 
 Inspirado no [Macuse](https://macuse.app), reescrito do zero em Swift, sem dependências externas.
 
@@ -58,6 +58,8 @@ Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Acces
 ## Voz: age antes de a frase acabar (v0.25)
 
 O padrão do demo de Andy Gao (X, 18/09/2026) com o Jev: a fala é transcrita em streaming pelo Speech.framework e **cada trecho parcial vira uma chamada ao Jev** com perguntas tipadas — `intent` (choice), `app` (choice entre candidatos que o código extraiu), `complete`, `addressed`, `destructive` (noul). O código decide: abrir app dispara assim que `intent ≥ 0,70` e `app ≥ 0,60`, mesmo com `complete` baixo; fechar app, abrir URL e pesquisar esperam `complete ≥ 0,60`; conversa (`addressed < 0,50`) é ignorada; a mesma ação não repete dentro da mesma frase. O Jev nunca gera texto: nome de app, URL e termo de busca saem do transcript por código e o Jev só escolhe.
+
+**Preparar ≠ executar (v0.28):** duas perguntas a mais por parcial, `cancel` e `review` (noul). Negação (`cancel ≥ 0,70`: “não, cancela, esquece”) cancela a frase inteira e nada mais dispara nela. Ação destrutiva (`≥ 0,70`) ou que o Jev diz merecer confirmação (`review ≥ 0,60`, exceto abrir app) vira `CONFIRM`: fica preparada e só executa quando o código vê um “sim / pode / confirma” no fim do próximo trecho. Nenhum número de confiança passa por cima disso. Medido com Jev real: “abre o notas… não, esquece, cancela” → cancel 0,98 → CANCELLED; “abre o notas e” → ACT em ~700 ms.
 
 ```sh
 macrix voice-say "abre o notas e"             # dry-run: mostra os números do Jev e o veredito

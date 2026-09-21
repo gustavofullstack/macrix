@@ -102,7 +102,7 @@ final class VoiceGateTests: XCTestCase {
         let chat = VoiceBrain.parse(.object(["answers": answer(intent: "open_app", p: 0.9, app: "Notes", appP: 0.9, addressed: 0.2)]))!
         if case .ignore = VoiceBrain.gate(chat, transcript: "ela abriu o notas ontem", done: []) {} else { XCTFail("not addressed") }
         let bad = VoiceBrain.parse(.object(["answers": answer(intent: "quit_app", p: 0.9, app: "Notes", appP: 0.9, complete: 0.9, destructive: 0.8)]))!
-        if case .ignore = VoiceBrain.gate(bad, transcript: "fecha o notas sem salvar", done: []) {} else { XCTFail("destructive") }
+        if case .confirm(.quit_app, "Notes", _) = VoiceBrain.gate(bad, transcript: "fecha o notas sem salvar", done: []) {} else { XCTFail("destructive must be prepared, never executed") }
     }
     func testQuitAndQueryWaitForComplete() {
         let quit = VoiceBrain.parse(.object(["answers": answer(intent: "quit_app", p: 0.9, app: "Notes", appP: 0.9, complete: 0.3)]))!
@@ -152,5 +152,65 @@ final class VoicePipelineTests: XCTestCase {
     func testApiKeyParserShape() {
         // never asserts the value; only that lookup does not crash and returns String? shape
         _ = Voice.apiKey()
+    }
+}
+
+/// Task 2 of the 21/09 plan: preparation is speculative, execution is authorized.
+final class VoiceHardeningTests: XCTestCase {
+    func ans(_ intent: String, p: Double = 0.9, app: String? = "Notes", appP: Double = 0.9, complete: Double = 0.9,
+             addressed: Double = 0.9, destructive: Double = 0.05, cancel: Double = 0.0, review: Double = 0.0) -> Voice.Answers {
+        var o = answer(intent: intent, p: p, app: app, appP: appP, complete: complete, addressed: addressed, destructive: destructive)
+        if case .object(var d) = o {
+            d["cancel"] = .object(["noul": .number(cancel)]); d["review"] = .object(["noul": .number(review)]); o = .object(d)
+        }
+        return VoiceBrain.parse(.object(["answers": o]))!
+    }
+    func testDestructiveNeverAutoExecutesEvenAtFullConfidence() {
+        let a = ans("quit_app", p: 1.0, appP: 1.0, destructive: 0.95)
+        guard case .confirm(.quit_app, "Notes", let why) = VoiceBrain.gate(a, transcript: "fecha o notas sem salvar", memory: .init()) else { return XCTFail() }
+        XCTAssertTrue(why.contains("destructive"))
+    }
+    func testReviewBlocksNonOpenIntentsButNotOpenApp() {
+        let q = ans("quit_app", review: 0.8)
+        if case .confirm = VoiceBrain.gate(q, transcript: "fecha o notas", memory: .init()) {} else { XCTFail("quit with review should confirm") }
+        let o = ans("open_app", complete: 0.1, review: 0.9)
+        XCTAssertEqual(VoiceBrain.gate(o, transcript: "abre o notas e", memory: .init()), .act(.open_app, "Notes"))   // speed path stays
+    }
+    func testExplicitYesExecutesPending() {
+        let mem = Voice.Memory(pending: (.quit_app, "Notes"))
+        let yes = ans("none", p: 0.3, app: nil)   // Jev sees no command in "sim, pode"
+        XCTAssertEqual(VoiceBrain.gate(yes, transcript: "sim, pode", memory: mem), .act(.quit_app, "Notes"))
+        let again = ans("quit_app")
+        if case .confirm(_, _, let why) = VoiceBrain.gate(again, transcript: "fecha o notas", memory: mem) { XCTAssertTrue(why.contains("explicit yes")) } else { XCTFail() }
+    }
+    func testLateDenialCancelsUtterance() {
+        let mem = Voice.Memory(pending: (.quit_app, "Notes"))
+        let no = ans("quit_app", cancel: 0.85)
+        if case .cancelled = VoiceBrain.gate(no, transcript: "fecha o notas… não, cancela", memory: mem) {} else { XCTFail("negation should cancel") }
+        let after = ans("open_app")
+        if case .ignore(let r) = VoiceBrain.gate(after, transcript: "abre o notas", memory: .init(cancelled: true)) { XCTAssertTrue(r.contains("cancelled")) } else { XCTFail() }
+    }
+    func testAmbientSpeechAndIntentChange() {
+        let ambient = ans("open_app", addressed: 0.2)
+        if case .ignore = VoiceBrain.gate(ambient, transcript: "ela abriu o notas ontem", memory: .init()) {} else { XCTFail() }
+        // open fired; speaker changes to quit: quit is prepared, not executed
+        let mem = Voice.Memory(done: ["open_app:Notes"])
+        let quit = ans("quit_app", review: 0.7)
+        if case .confirm(.quit_app, "Notes", _) = VoiceBrain.gate(quit, transcript: "abre o notas… não, fecha o notas", memory: mem) {} else { XCTFail() }
+    }
+    func testUtteranceMemoryTransitions() {
+        let u = VoiceActor.Utterance()
+        u.mark(.confirm(.quit_app, "Notes", "x")); XCTAssertEqual(u.memory().pending?.1, "Notes")
+        u.mark(.act(.quit_app, "Notes")); XCTAssertNil(u.memory().pending); XCTAssertTrue(u.snapshot().contains("quit_app:Notes"))
+        u.mark(.cancelled("no")); XCTAssertTrue(u.memory().cancelled)
+        u.reset(); XCTAssertEqual(u.memory(), Voice.Memory())
+        XCTAssertTrue(Apps.affirmative(in: "isso, pode")); XCTAssertFalse(Apps.affirmative(in: "abre o notas"))
+    }
+    func testStepShowsConfirmAndCancel() {
+        let fake = FakeJev(answer(intent: "quit_app", p: 0.95, app: "Notes", appP: 0.95, complete: 0.9, destructive: 0.9))
+        let brain = VoiceBrain(client: fake, installed: apps); let u = VoiceActor.Utterance()
+        let out = VoiceActor.step(brain: brain, transcript: "fecha o notas sem salvar", isFinal: false, utterance: u, execute: true)
+        XCTAssertTrue(out.contains("CONFIRM quit_app → Notes"), out); XCTAssertEqual(u.memory().pending?.1, "Notes")
+        XCTAssertFalse(out.contains("result: quit"))                     // nothing executed
     }
 }

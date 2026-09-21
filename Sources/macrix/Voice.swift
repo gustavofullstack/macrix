@@ -41,13 +41,30 @@ public enum Voice {
         public var complete: Double
         public var addressed: Double
         public var destructive: Double
+        public var cancel: Double = 0      // speaker negating / cancelling what was just said
+        public var review: Double = 0      // a careful assistant would confirm before executing
     }
+    public static let minCancel = 0.70   // 0.60 cancelou "fecha o notas sem salvar nada"; negação real deu 0.98
+    public static let minReview = 0.60
 
     public enum Verdict: Equatable, Sendable {
         case act(Intent, String)        // intent + target (app name, url or query)
         case wait(String)               // reason
         case ignore(String)
         case skip(String)               // already done for this utterance
+        case confirm(Intent, String, String)   // prepared, NOT executed: needs an explicit yes
+        case cancelled(String)          // speaker negated; nothing else fires in this utterance
+    }
+
+    /// What the gate knows about the utterance so far.
+    public struct Memory: Equatable, Sendable {
+        public var done: Set<String> = []
+        public var pending: (Intent, String)? = nil
+        public var cancelled = false
+        public init(done: Set<String> = [], pending: (Intent, String)? = nil, cancelled: Bool = false) {
+            self.done = done; self.pending = pending; self.cancelled = cancelled
+        }
+        public static func == (l: Memory, r: Memory) -> Bool { l.done == r.done && l.cancelled == r.cancelled && l.pending?.0 == r.pending?.0 && l.pending?.1 == r.pending?.1 }
     }
 
     /// API key: env first, then the station vault (600, local). Never logged.
@@ -176,6 +193,14 @@ public enum Apps {
         return nil
     }
 
+    /// Explicit yes, checked by code on the tail of the transcript (never by the model).
+    public static func affirmative(in transcript: String) -> Bool {
+        let words = normalize(transcript).components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let tail = Array(words.suffix(3))
+        let yes: Set<String> = ["sim", "pode", "confirma", "confirmo", "confirmado", "isso", "vai", "yes", "confirm", "proceed", "go"]
+        return tail.contains(where: { yes.contains($0) })
+    }
+
     /// Words after the search verb ("pesquisa|pesquise|procura|procure|busca|busque|search for|search|google").
     public static func querySpan(in transcript: String) -> String? {
         let n = transcript.lowercased()
@@ -229,6 +254,14 @@ public struct VoiceBrain: Sendable {
                 "type": .string("noul"),
                 "instructions": .string("Would executing this lose data, close unsaved work, or be hard to undo?"),
             ]),
+            "cancel": .object([
+                "type": .string("noul"),
+                "instructions": .string("Is the speaker negating, cancelling or taking back the command (e.g. 'não', 'cancela', 'esquece', 'para', 'no wait', 'never mind')?"),
+            ]),
+            "review": .object([
+                "type": .string("noul"),
+                "instructions": .string("Would a careful assistant ask for confirmation before executing this, rather than act immediately?"),
+            ]),
         ]
         if !candidates.isEmpty {
             var crit: [String: JSONValue] = ["none": .string("no application named or a different one than the listed")]
@@ -260,40 +293,63 @@ public struct VoiceBrain: Sendable {
         return Voice.Answers(intent: intent, intentP: intentP, app: app, appP: appP,
                              complete: answers["complete"]?["noul"]?.double ?? 0,
                              addressed: answers["addressed"]?["noul"]?.double ?? 0,
-                             destructive: answers["destructive"]?["noul"]?.double ?? 0)
+                             destructive: answers["destructive"]?["noul"]?.double ?? 0,
+                             cancel: answers["cancel"]?["noul"]?.double ?? 0,
+                             review: answers["review"]?["noul"]?.double ?? 0)
     }
 
     /// The gate. Opening an app fires mid-sentence; anything that needs the
     /// whole sentence (a query, a URL) or that can hurt (quit) waits for `complete`.
-    public static func gate(_ a: Voice.Answers, transcript: String, done: Set<String>) -> Voice.Verdict {
+    /// The gate. Preparation is speculative; execution is authorized only here.
+    /// Opening an app fires mid-sentence. Anything destructive, or that Jev says
+    /// deserves confirmation, is PREPARED and waits for an explicit yes — no
+    /// confidence number overrides that. A negation cancels the whole utterance.
+    public static func gate(_ a: Voice.Answers, transcript: String, memory: Voice.Memory) -> Voice.Verdict {
+        if memory.cancelled { return .ignore("utterance cancelled earlier") }
+        if a.cancel >= Voice.minCancel { return .cancelled("speaker negated (\(fmt(a.cancel)))") }
         if a.addressed < Voice.minAddressed { return .ignore("not addressed to me (\(fmt(a.addressed)))") }
+        if let (pi, pt) = memory.pending, Apps.affirmative(in: transcript) {
+            let key = "\(pi.rawValue):\(pt)"
+            return memory.done.contains(key) ? .skip(key) : .act(pi, pt)
+        }
         if a.intent == .none || a.intentP < Voice.actIntent { return .wait("intent \(a.intent.rawValue) \(fmt(a.intentP)) < \(fmt(Voice.actIntent))") }
-        if a.destructive >= Voice.maxDestructive { return .ignore("destructive \(fmt(a.destructive))") }
+        var target: String
         switch a.intent {
         case .open_app, .quit_app:
             guard let app = a.app, a.appP >= Voice.actTarget else { return .wait("app \(a.app ?? "none") \(fmt(a.appP)) < \(fmt(Voice.actTarget))") }
             if a.intent == .quit_app, a.complete < Voice.needComplete { return .wait("quit waits for complete \(fmt(a.complete))") }
-            let key = "\(a.intent.rawValue):\(app)"
-            return done.contains(key) ? .skip(key) : .act(a.intent, app)
+            target = app
         case .open_url:
             guard let u = Apps.urlSpan(in: transcript) else { return .wait("no url span yet") }
             guard a.complete >= Voice.needComplete else { return .wait("url waits for complete \(fmt(a.complete))") }
-            let key = "open_url:\(u)"
-            return done.contains(key) ? .skip(key) : .act(.open_url, u)
+            target = u
         case .search_web:
             guard let q = Apps.querySpan(in: transcript) else { return .wait("no query span yet") }
             guard a.complete >= Voice.needComplete else { return .wait("query waits for complete \(fmt(a.complete))") }
-            let key = "search_web:\(q)"
-            return done.contains(key) ? .skip(key) : .act(.search_web, q)
+            target = q
         case .none:
             return .wait("none")
         }
+        let key = "\(a.intent.rawValue):\(target)"
+        if memory.done.contains(key) { return .skip(key) }
+        if a.destructive >= Voice.maxDestructive { return .confirm(a.intent, target, "destructive \(fmt(a.destructive))") }
+        if a.intent != .open_app, a.review >= Voice.minReview { return .confirm(a.intent, target, "review \(fmt(a.review))") }
+        if let (pi, pt) = memory.pending, pi == a.intent, pt == target { return .confirm(a.intent, target, "still waiting for an explicit yes") }
+        return .act(a.intent, target)
+    }
+
+    /// Back-compat wrapper used by older callers/tests.
+    public static func gate(_ a: Voice.Answers, transcript: String, done: Set<String>) -> Voice.Verdict {
+        gate(a, transcript: transcript, memory: Voice.Memory(done: done))
     }
 
     static func fmt(_ d: Double) -> String { String(format: "%.2f", d) }
 
     /// Full step: candidates → Jev → gate. Returns answers + verdict + latency.
     public func decide(transcript: String, isFinal: Bool, done: Set<String>) -> (Voice.Answers?, Voice.Verdict, Double, String?) {
+        decide(transcript: transcript, isFinal: isFinal, memory: Voice.Memory(done: done))
+    }
+    public func decide(transcript: String, isFinal: Bool, memory: Voice.Memory) -> (Voice.Answers?, Voice.Verdict, Double, String?) {
         let t = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, t.count <= 600 else { return (nil, .ignore("empty or too long"), 0, nil) }
         let cands = Apps.candidates(in: t, installed: installed)
@@ -304,7 +360,7 @@ public struct VoiceBrain: Sendable {
         case .success(let resp):
             let ms = Date().timeIntervalSince(t0) * 1000
             guard let a = VoiceBrain.parse(resp) else { return (nil, .wait("unparseable answer"), ms, "bad response shape") }
-            return (a, VoiceBrain.gate(a, transcript: t, done: done), ms, nil)
+            return (a, VoiceBrain.gate(a, transcript: t, memory: memory), ms, nil)
         }
     }
 }
@@ -336,24 +392,31 @@ public enum VoiceActor {
     /// One utterance's memory: what already ran, so partials don't repeat it.
     public final class Utterance: @unchecked Sendable {
         private let lock = NSLock()
-        private var done = Set<String>()
+        private var mem = Voice.Memory()
         public init() {}
-        public func snapshot() -> Set<String> { lock.withLock { done } }
+        public func snapshot() -> Set<String> { lock.withLock { mem.done } }
+        public func memory() -> Voice.Memory { lock.withLock { mem } }
         public func mark(_ v: Voice.Verdict) {
-            guard case .act(let i, let t) = v else { return }
-            lock.withLock { _ = done.insert("\(i.rawValue):\(t)") }
+            lock.withLock {
+                switch v {
+                case .act(let i, let t): mem.done.insert("\(i.rawValue):\(t)"); mem.pending = nil
+                case .confirm(let i, let t, _): mem.pending = (i, t)
+                case .cancelled: mem.cancelled = true; mem.pending = nil
+                default: break
+                }
+            }
         }
-        public func reset() { lock.withLock { done.removeAll() } }
+        public func reset() { lock.withLock { mem = Voice.Memory() } }
     }
 
     /// Text-in pipeline used by the `voice_decide` tool and by `voice_listen`.
     public static func step(brain: VoiceBrain, transcript: String, isFinal: Bool,
                             utterance: Utterance, execute: Bool) -> String {
-        let (a, verdict, ms, err) = brain.decide(transcript: transcript, isFinal: isFinal, done: utterance.snapshot())
+        let (a, verdict, ms, err) = brain.decide(transcript: transcript, isFinal: isFinal, memory: utterance.memory())
         var lines: [String] = ["transcript: \(transcript)\(isFinal ? " [final]" : "")", "jev: \(Int(ms)) ms"]
         if let err = err { lines.append("error: \(err)") }
         if let a = a {
-            lines.append("intent=\(a.intent.rawValue) \(VoiceBrain.fmt(a.intentP)) app=\(a.app ?? "none") \(VoiceBrain.fmt(a.appP)) complete=\(VoiceBrain.fmt(a.complete)) addressed=\(VoiceBrain.fmt(a.addressed)) destructive=\(VoiceBrain.fmt(a.destructive))")
+            lines.append("intent=\(a.intent.rawValue) \(VoiceBrain.fmt(a.intentP)) app=\(a.app ?? "none") \(VoiceBrain.fmt(a.appP)) complete=\(VoiceBrain.fmt(a.complete)) addressed=\(VoiceBrain.fmt(a.addressed)) destructive=\(VoiceBrain.fmt(a.destructive)) cancel=\(VoiceBrain.fmt(a.cancel)) review=\(VoiceBrain.fmt(a.review))")
         }
         switch verdict {
         case .act(let i, let t):
@@ -365,6 +428,12 @@ public enum VoiceActor {
         case .wait(let r): lines.append("verdict: WAIT (\(r))")
         case .ignore(let r): lines.append("verdict: IGNORE (\(r))")
         case .skip(let k): lines.append("verdict: SKIP already done (\(k))")
+        case .confirm(let i, let tg, let r):
+            lines.append("verdict: CONFIRM \(i.rawValue) → \(tg) (\(r)) · prepared, not executed; say “sim / pode / confirma” to run")
+            utterance.mark(verdict)
+        case .cancelled(let r):
+            lines.append("verdict: CANCELLED (\(r)) · nothing else runs in this utterance")
+            utterance.mark(verdict)
         }
         if isFinal { utterance.reset() }
         return lines.joined(separator: "\n")
