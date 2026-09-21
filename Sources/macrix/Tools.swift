@@ -450,4 +450,15 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "providers_spend",
         description: "Measured tokens per provider (muse) with n/a reasons elsewhere; USD only from ~/.config/macrix/rates.json.",
         inputSchema: objSchema([:])) { _ async in textContent(Spend.report()) })
+
+    registry.register(Tool(
+        name: "catalog_search",
+        description: "Search the 1000-item capability catalog (skills/CLIs/MCPs/tools).",
+        inputSchema: objSchema(["query": "string", "limit": "number"], required: ["query"])) { args async in
+        textContent(Catalog.search(args["query"]?.string ?? "", limit: args["limit"]?.int ?? 20))
+    })
+    registry.register(Tool(
+        name: "catalog_stats",
+        description: "Catalog coverage: counts per kind vs the 1000 target.",
+        inputSchema: objSchema([:])) { _ async in textContent(Catalog.stats()) })
 }
