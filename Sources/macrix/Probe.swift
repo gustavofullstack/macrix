@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// v0.21 probe family (G1): uptime/load, memory, listening ports,
 /// markdown headings, plist dump, launchd jobs. All read-only;
@@ -48,5 +49,54 @@ public enum Probe {
         let (code, out) = runProcess("/bin/launchctl", ["list"], timeoutSeconds: 20)
         guard code == 0 else { return "launchctl unavailable." }
         return String(out.split(separator: "\n").prefix(41).joined(separator: "\n"))
+    }
+
+    static func fileHash(_ path: String) -> String {
+        let p = Git.expand(path)
+        guard !p.isEmpty, FileManager.default.fileExists(atPath: p) else { return "missing file." }
+        if Files.denied(path) { return "refused: secret-adjacent path." }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: p)), data.count <= 100_000_000 else {
+            return "unreadable or over 100MB."
+        }
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func dirSize(_ dir: String) -> String {
+        let p = Git.expand(dir)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let ok = p == "/tmp" || p.hasPrefix("/tmp/") || p.hasPrefix(home + "/Documents/PROJETOS/")
+        guard ok else { return "refused: only /tmp and PROJETOS subtrees." }
+        let (code, out) = runProcess("/usr/bin/du", ["-sh", p], timeoutSeconds: 60)
+        guard code == 0 else { return "du failed." }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func hostName() -> String {
+        let (code, out) = runProcess("/usr/sbin/scutil", ["--get", "ComputerName"], timeoutSeconds: 10)
+        guard code == 0 else { return "hostname unavailable." }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func plistGet(_ path: String, key: String) -> String {
+        let p = Git.expand(path)
+        guard !p.isEmpty, FileManager.default.fileExists(atPath: p) else { return "missing file." }
+        if Files.denied(path) { return "refused: secret-adjacent path." }
+        let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty, k.count <= 200, k.range(of: "^[A-Za-z0-9_.]+$", options: .regularExpression) != nil else {
+            return "need a dot-separated key (letters/digits/._)."
+        }
+        let (code, out) = runProcess("/usr/bin/plutil",
+            ["-extract", k, "json", "-o", "-", p], timeoutSeconds: 30)
+        guard code == 0 else { return "key not found (or not a plist)." }
+        return String(out.prefix(100_000))
+    }
+
+    static func tailscale() -> String {
+        let ts = NSHomeDirectory() + "/.local/bin/tailscale"
+        guard FileManager.default.isExecutableFile(atPath: ts) else { return "tailscale cli missing." }
+        let (code, out) = runProcess(ts, ["status"], timeoutSeconds: 20)
+        guard code == 0 else { return "tailscale status failed." }
+        return String(out.split(separator: "\n").prefix(21).joined(separator: "\n").prefix(8000))
     }
 }

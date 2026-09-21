@@ -56,6 +56,31 @@ public enum Jev {
         return "jev status unclear."
     }
 
+    static func judge(state: String, question: String) -> String {
+        let s = state.trimmingCharacters(in: .whitespacesAndNewlines)
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, !q.isEmpty, s.count <= 4000, q.count <= 1000 else {
+            return "need state (max 4000) + question (max 1000)."
+        }
+        let (code, out) = runShell(helper(), args: ["eval", s, q], timeoutSeconds: 60)
+        guard code == 0 else { return "jev eval failed." }
+        return String(out.prefix(8000))
+    }
+
+    static func skill(_ prompt: String) -> String {
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty, p.count <= 2000 else { return "need a prompt (max 2000)." }
+        let (code, out) = runShell(helper(), args: ["skill-suggest", p], timeoutSeconds: 60)
+        guard code == 0 else { return "jev skill-suggest failed." }
+        return String(out.prefix(8000))
+    }
+
+    static func models() -> String {
+        let (code, out) = runShell(helper(), args: ["models"], timeoutSeconds: 30)
+        guard code == 0 else { return "jev models failed." }
+        return String(out.prefix(8000))
+    }
+
     static func bun() -> String? {
         let home = NSHomeDirectory()
         let cands = [home + "/.bun/bin/bun", home + "/.local/bin/bun",

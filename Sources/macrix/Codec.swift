@@ -30,6 +30,36 @@ public enum Codec {
 
     static func uuid() -> String { UUID().uuidString.lowercased() }
 
+    static func urlEncode(_ text: String) -> String {
+        guard !text.isEmpty, text.utf8.count <= 100_000 else { return "need text (100KB cap)." }
+        return text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "encode failed."
+    }
+
+    static func urlDecode(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, t.utf8.count <= 100_000 else { return "need text (100KB cap)." }
+        return t.removingPercentEncoding ?? "invalid percent-encoding."
+    }
+
+    static func fileB64(_ path: String) -> String {
+        let p = Git.expand(path)
+        guard !p.isEmpty, FileManager.default.fileExists(atPath: p) else { return "missing file." }
+        if Files.denied(path) { return "refused: secret-adjacent path." }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: p)), data.count <= 10_000_000 else {
+            return "unreadable or over 10MB."
+        }
+        return data.base64EncodedString()
+    }
+
+    static func randomHex(_ n: Int) -> String {
+        let count = min(max(n, 1), 64)
+        var bytes = [UInt8](repeating: 0, count: count)
+        guard SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess else {
+            return "random failed."
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
     static func jsonPretty(_ raw: String) -> String {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, let d = t.data(using: .utf8) else { return "missing json." }

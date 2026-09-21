@@ -909,4 +909,83 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "launchd_list",
         description: "User launchd jobs (first 40 lines).",
         inputSchema: objSchema([:])) { _ async in textContent(Probe.launchd()) })
+
+    // MARK: - v0.22 the 100: jev x3 + codec x4 + probe x5 + csv (G1, web_* since v0.10)
+    registry.register(Tool(
+        name: "jev_eval",
+        description: "Jev typed judgment over a state + question. Returns the noul number. Needs MACRIX_JEV=1.",
+        inputSchema: objSchema(["state": "string", "question": "string"], required: ["state", "question"])) { args async in
+        guard Jev.enabled() else { return textContent(Jev.disabled(), isError: true) }
+        return textContent(Jev.judge(state: args["state"]?.string ?? "", question: args["question"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "jev_skill",
+        description: "Jev picks the right skill for a request. Needs MACRIX_JEV=1.",
+        inputSchema: objSchema(["prompt": "string"], required: ["prompt"])) { args async in
+        guard Jev.enabled() else { return textContent(Jev.disabled(), isError: true) }
+        return textContent(Jev.skill(args["prompt"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "jev_models",
+        description: "List Jev/TypeSafe models available locally. Needs MACRIX_JEV=1.",
+        inputSchema: objSchema([:])) { _ async in
+        guard Jev.enabled() else { return textContent(Jev.disabled(), isError: true) }
+        return textContent(Jev.models())
+    })
+    registry.register(Tool(
+        name: "file_b64",
+        description: "Base64 of a file's bytes (10MB cap). Secret paths refused.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Codec.fileB64(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "random_hex",
+        description: "Cryptographic random bytes as hex (1-64 bytes).",
+        inputSchema: objSchema(["bytes": "string"], required: ["bytes"])) { args async in
+        textContent(Codec.randomHex(Int(args["bytes"]?.string ?? "16") ?? 16))
+    })
+    registry.register(Tool(
+        name: "plist_get",
+        description: "Extract one key-path from a plist (dot-separated). Secret paths refused.",
+        inputSchema: objSchema(["path": "string", "key": "string"], required: ["path", "key"])) { args async in
+        textContent(Probe.plistGet(args["path"]?.string ?? "", key: args["key"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "url_encode",
+        description: "Percent-encode text.",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Codec.urlEncode(args["text"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "url_decode",
+        description: "Decode percent-encoding.",
+        inputSchema: objSchema(["text": "string"], required: ["text"])) { args async in
+        textContent(Codec.urlDecode(args["text"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "file_hash",
+        description: "SHA-256 hex of a file (100MB cap). Secret paths refused.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(Probe.fileHash(args["path"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "dir_size",
+        description: "Human du -sh of /tmp or PROJETOS subtrees.",
+        inputSchema: objSchema(["dir": "string"], required: ["dir"])) { args async in
+        textContent(Probe.dirSize(args["dir"]?.string ?? ""))
+    })
+    registry.register(Tool(
+        name: "host_name",
+        description: "This Mac's computer name.",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.hostName()) })
+    registry.register(Tool(
+        name: "tailscale_status",
+        description: "Tailscale mesh status (first 20 nodes).",
+        inputSchema: objSchema([:])) { _ async in textContent(Probe.tailscale()) })
+    registry.register(Tool(
+        name: "csv_cols",
+        description: "Numbered column names from a CSV header row.",
+        inputSchema: objSchema(["path": "string"], required: ["path"])) { args async in
+        textContent(TextUtil.csvCols(args["path"]?.string ?? ""))
+    })
 }

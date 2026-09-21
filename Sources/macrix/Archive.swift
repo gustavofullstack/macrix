@@ -70,6 +70,18 @@ public enum TextUtil {
         return rows.joined(separator: "\n")
     }
 
+    static func csvCols(_ path: String) -> String {
+        let body = Files.read(path)
+        if body.hasPrefix("refused") { return body }
+        guard let header = body.components(separatedBy: "\n").first(where: { !$0.isEmpty }) else {
+            return "(empty file)"
+        }
+        let cols = header.split(separator: ",", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return cols.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+    }
+
     static func grep(_ path: String, pattern: String) -> String {
         let body = Files.read(path)
         if body.hasPrefix("refused") { return body }
