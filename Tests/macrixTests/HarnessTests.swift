@@ -229,3 +229,56 @@ final class GatePersistenceAndApprovalTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: g.statePath)
     }
 }
+
+final class LedgerBridgeTests: XCTestCase {
+    /// A python ≥ 3.11 for the fake bridge; skip when the machine has none.
+    func modernPython() -> String? {
+        for p in ["/Users/sug/.local/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"] {
+            let (c, out) = runProcess(p, ["-c", "import sys; print(sys.version_info >= (3, 11))"], timeoutSeconds: 10)
+            if c == 0, out.contains("True") { return p }
+        }
+        return nil
+    }
+    func writeFakeBridge(_ dir: String) -> String {
+        let script = """
+        import json, sys, os
+        p = json.loads(sys.stdin.read()); log = os.path.join(os.path.dirname(os.path.abspath(sys.argv[2])), 'calls.log')
+        open(log, 'a').write(p['action'] + '\\n')
+        if p['action'] == 'reserve' and p['event_id'] == 'frozen-op': print(json.dumps({'ok': False, 'code': 'ACCOUNT_FROZEN'})); sys.exit(1)
+        print(json.dumps({'ok': True, 'balance': {'cap': 1000000, 'held': 1000 if p['action'] in ('reserve','dispatch') else 0, 'spent': 1000 if p['action']=='settle' else 0, 'remaining': 999000, 'frozen': p['action']=='mark_unknown', 'over_budget': False}}))
+        """
+        let path = dir + "/fake_bridge.py"; try? script.write(toFile: path, atomically: true, encoding: .utf8); return path
+    }
+    func testLoadStates() {
+        XCTAssertEqual(LedgerBridge.load(path: "/tmp/definitely-missing-\(UUID().uuidString).json").map { $0 == nil }, .success(true))
+        let dir = "/tmp/macrix_lb_\(UUID().uuidString)"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let bad = dir + "/bad.json"; try? "{\"python\":\"/usr/bin/python3\",\"bridge\":\"\(dir)/nope.py\",\"database\":\"\(dir)/db.sqlite\"}".write(toFile: bad, atomically: true, encoding: .utf8)
+        if case .failure(let e) = LedgerBridge.load(path: bad) { XCTAssertEqual(e, .missing("\(dir)/nope.py")) } else { XCTFail("missing bridge must fail") }
+        let br = writeFakeBridge(dir)
+        let old = dir + "/old.json"; try? "{\"python\":\"/usr/bin/python3\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\"}".write(toFile: old, atomically: true, encoding: .utf8)
+        if case .failure(let e) = LedgerBridge.load(path: old) { if case .pythonTooOld = e {} else { XCTFail("3.9 must be refused, got \(e)") } } else { XCTFail("old python must fail preflight") }
+        let rel = dir + "/rel.json"; try? "{\"python\":\"python3\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\"}".write(toFile: rel, atomically: true, encoding: .utf8)
+        if case .failure(.badConfig) = LedgerBridge.load(path: rel) {} else { XCTFail("relative path must be refused") }
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+    func testGateReservesDispatchesSettlesThroughBridge() throws {
+        guard let py = modernPython() else { throw XCTSkip("no python ≥ 3.11 here") }
+        let dir = "/tmp/macrix_lb_\(UUID().uuidString)"; try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let br = writeFakeBridge(dir)
+        let cfg = dir + "/ledger.json"; try? "{\"python\":\"\(py)\",\"bridge\":\"\(br)\",\"database\":\"\(dir)/db.sqlite\",\"tenant\":\"t\",\"attempt_units\":1000}".write(toFile: cfg, atomically: true, encoding: .utf8)
+        let g = HarnessGate(ledgerPath: dir + "/ledger.jsonl")
+        g.ledgerLoad = LedgerBridge.load(path: cfg)
+        XCTAssertNotNil(g.ledger, "\(g.ledgerLoad)")
+        XCTAssertNil(g.admit(.claude_sonnet, opId: "op-1"))
+        XCTAssertEqual(g.settle(.claude_sonnet, opId: "op-1", result: .success(Harness.RunResult(agent: .claude_sonnet, argv: [], exit: 0, seconds: 1, output: "ok", truncated: false))), "settled")
+        XCTAssertNil(g.admit(.muse, opId: "op-2"))
+        XCTAssertEqual(g.settle(.muse, opId: "op-2", result: .success(Harness.RunResult(agent: .muse, argv: [], exit: -1, seconds: 5, output: "[macrix: killed after 5s]", truncated: false))), "unknown")
+        XCTAssertEqual(g.admit(.muse, opId: "frozen-op"), .frozen("ACCOUNT_FROZEN"))
+        let calls = (try? String(contentsOfFile: dir + "/calls.log", encoding: .utf8)) ?? ""
+        XCTAssertEqual(calls, "open_account\nreserve\ndispatch\nsettle\nopen_account\nreserve\ndispatch\nmark_unknown\nopen_account\nreserve\n", calls)
+        let line = (try? String(contentsOfFile: dir + "/ledger.jsonl", encoding: .utf8)) ?? ""
+        XCTAssertTrue(line.contains("\"cost_status\":\"attempt_units_settled\"") && line.contains("\"ledger\":\"ok\""), line)
+        XCTAssertTrue(g.status().contains("ledger: on"))
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+}

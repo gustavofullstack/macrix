@@ -1039,6 +1039,7 @@ func registerHarnessTools(into registry: ToolRegistry) {
             case .busy(let n): return textContent("busy: \(n) agent runs in flight (max \(HarnessGate.shared.maxConcurrent)); retry later.", isError: true)
             case .duplicate(let id): return textContent("duplicate op_id \(id): already ran within the dedupe window; not running twice.", isError: true)
             case .suspended(let lane, let until): return textContent("\(lane.rawValue) suspended after a quota answer until \(ISO8601DateFormatter().string(from: until)).", isError: true)
+            case .frozen(let why): return textContent("ledger refused the attempt (\(why)); account needs review.", isError: true)
             }
         }
         let r = Harness.run(a, prompt: args["prompt"]?.string ?? "", workspace: args["workspace"]?.string ?? "",

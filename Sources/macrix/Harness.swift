@@ -339,6 +339,10 @@ public final class HarnessGate: @unchecked Sendable {
     public var maxConcurrent = 2
     public var dedupeWindow: TimeInterval = 600
     public var suspendFor: TimeInterval = 1800
+    /// Canonical ledger (PR #2 bridge). Loaded once; nil = accounting off.
+    public lazy var ledgerLoad: Result<LedgerBridge?, LedgerBridge.LoadError> = LedgerBridge.load()
+    public var ledger: LedgerBridge? { if case .success(let b?) = ledgerLoad { return b }; return nil }
+    private var ledgerNotes: [String: String] = [:]      // op key → ledger outcome for the ledger line
 
     /// Durable state next to the ledger: seen op_ids, suspensions, in-flight runs,
     /// and single-use approvals. Written atomically after every change.
@@ -357,7 +361,7 @@ public final class HarnessGate: @unchecked Sendable {
         recoverLocked()
     }
 
-    public enum Refusal: Equatable { case busy(Int), duplicate(String), suspended(Harness.Agent, Date) }
+    public enum Refusal: Equatable { case busy(Int), duplicate(String), suspended(Harness.Agent, Date), frozen(String) }
 
     /// Reserve a slot. Returns nil when admitted.
     public func admit(_ lane: Harness.Agent, opId: String?, now: Date = Date()) -> Refusal? {
@@ -368,9 +372,21 @@ public final class HarnessGate: @unchecked Sendable {
             if seen[id] != nil { return .duplicate(id) }
         }
         if running >= maxConcurrent { return .busy(running) }
+        let key = opId?.isEmpty == false ? opId! : UUID().uuidString
+        if let l = ledger {
+            // reserve → dispatch before the process exists; a frozen account refuses
+            _ = l.openAccount()
+            switch l.reserve(key) {
+            case .failure(let e): return .frozen(e.message)
+            case .success(let b) where b.frozen: _ = l.cancel(key); return .frozen("account frozen")
+            case .success: break
+            }
+            if case .failure(let e) = l.dispatch(key) { _ = l.cancel(key); return .frozen(e.message) }
+            ledgerNotes[key] = "reserved+dispatched"
+        }
         running += 1
         if let id = opId, !id.isEmpty { seen[id] = now }
-        inFlight[opId?.isEmpty == false ? opId! : UUID().uuidString] = (lane, now)
+        inFlight[key] = (lane, now)
         saveLocked()
         return nil
     }
@@ -380,7 +396,9 @@ public final class HarnessGate: @unchecked Sendable {
     public func settle(_ lane: Harness.Agent, opId: String?, result: Result<Harness.RunResult, JevError>, now: Date = Date()) -> String {
         lock.lock(); defer { lock.unlock() }
         running = max(0, running - 1)
-        if let id = opId, !id.isEmpty { inFlight[id] = nil } else if let k = inFlight.min(by: { $0.value.1 < $1.value.1 })?.key { inFlight[k] = nil }
+        var key = opId?.isEmpty == false ? opId! : ""
+        if key.isEmpty, let k = inFlight.min(by: { $0.value.1 < $1.value.1 })?.key { key = k }
+        inFlight[key] = nil
         defer { saveLocked() }
         var status = "settled"; var seconds = 0.0; var exit: Int32 = -1
         switch result {
@@ -395,9 +413,20 @@ public final class HarnessGate: @unchecked Sendable {
         }
         // ChatGPT review (21/09): exit 0 proves execution, never cost. Cost stays
         // "unknown" until something reconciles it against the provider's meter.
+        var costStatus = "unknown"; var ledgerNote = "off"
+        if let l = ledger, ledgerNotes[key] != nil {
+            let r: Result<LedgerBridge.Balance, JevError>
+            switch status {
+            case "settled", "quota": r = l.settle(key); costStatus = r.isOk ? "attempt_units_settled" : "unknown"
+            case "unknown": r = l.markUnknown(key)            // hold preserved, account frozen until review
+            default: r = l.cancel(key)
+            }
+            ledgerNote = r.isOk ? "ok" : (try? r.get()) == nil ? "error:\((r.error?.message ?? "?"))" : "ok"
+            ledgerNotes[key] = nil
+        }
         let line: [String: JSONValue] = ["ts": .string(ISO8601DateFormatter().string(from: now)), "lane": .string(lane.rawValue),
             "op_id": .string(opId ?? ""), "seconds": .number((seconds * 10).rounded() / 10), "exit": .number(Double(exit)),
-            "execution_status": .string(status), "cost_status": .string("unknown")]
+            "execution_status": .string(status), "cost_status": .string(costStatus), "ledger": .string(ledgerNote)]
         if let d = try? JSONEncoder().encode(JSONValue.object(line)), let s = String(data: d, encoding: .utf8) {
             let dir = (ledgerPath as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -416,7 +445,9 @@ public final class HarnessGate: @unchecked Sendable {
     public func status(now: Date = Date()) -> String {
         lock.lock(); defer { lock.unlock() }
         let s = suspended.filter { $0.value > now }.map { "\($0.key.rawValue) until \(ISO8601DateFormatter().string(from: $0.value))" }.sorted()
-        return "running \(running)/\(maxConcurrent) · suspended: \(s.isEmpty ? "none" : s.joined(separator: ", ")) · ledger \(ledgerPath)"
+        var bal = ""
+        if let l = ledger, case .success(let b) = l.balance() { bal = " · account cap \(b.cap) held \(b.held) spent \(b.spent)\(b.frozen ? " FROZEN" : "")" }
+        return "running \(running)/\(maxConcurrent) · suspended: \(s.isEmpty ? "none" : s.joined(separator: ", ")) · attempts \(ledgerPath) · \(LedgerBridge.describe(ledgerLoad))\(bal)"
     }
 
     /// Test hook.
@@ -508,4 +539,10 @@ public final class HarnessGate: @unchecked Sendable {
         inFlight = [:]; running = 0
         saveLocked()
     }
+}
+
+
+extension Result {
+    var isOk: Bool { if case .success = self { return true }; return false }
+    var error: Failure? { if case .failure(let e) = self { return e }; return nil }
 }

@@ -1,6 +1,6 @@
 # macrix
 
-Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.30.0: 109 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
+Automação do macOS + computer-use + metering de uso — servidor MCP aberto (open-core). **v0.31.0: 109 tools**, console web e medição por chave. Sem o teto de 100 chamadas/dia do Macuse, com quantos agentes quiser ao mesmo tempo.
 
 Inspirado no [Macuse](https://macuse.app), reescrito do zero em Swift, sem dependências externas.
 
@@ -57,7 +57,9 @@ Calendário/Lembretes pedem autorização na 1ª vez; Notas pede Full Disk Acces
 
 **Jornada (v0.29):** `journey_run` amarra tudo num `journey_id` único: Jev roteia → `needs_review ≥ 0,70` para e devolve `needs_human_review` → gate admite (o mesmo id nunca roda duas vezes) → a faixa executa no workspace → ledger grava execution/cost → log de 5 passos com o desfecho.
 
-**Aprovação e persistência (v0.30):** quando a jornada para em `needs_human_review`, sai um token `apr_…` de **uso único**, válido 15 min, amarrado ao `journey_id`, à faixa e ao hash do texto da tarefa; `journey_approve` só executa com id + token + o mesmo texto. Tarefa que cita marcador de produção (IPs das VPS, EasyPanel, `docker restart/stop`, `rm -rf /`…) é bloqueada por padrão, com ou sem token. O estado do gate (op_ids vistos, suspensões, execuções em voo, aprovações) vive em `~/.config/macrix/agent-ledger-state.json`, gravado atomicamente; ao reiniciar, execução que estava em voo vira `unknown` no ledger e o slot é liberado. `env_inventory` é o censo do que os agentes têm aqui: MCPs, skills, commands, plugins, hooks, agentes do opencode, perfis do codex, skills do muse (só nomes).
+**Aprovação e persistência (v0.30):** quando a jornada para em `needs_human_review`, sai um token `apr_…` de **uso único**, válido 15 min, amarrado ao `journey_id`, à faixa e ao hash do texto da tarefa; `journey_approve` só executa com id + token + o mesmo texto. Tarefa que cita marcador de produção (IPs das VPS, EasyPanel, `docker restart/stop`, `rm -rf /`…) é bloqueada por padrão, com ou sem token. O estado do gate (op_ids vistos, suspensões, execuções em voo, aprovações) vive em `~/.config/macrix/agent-ledger-state.json`, gravado atomicamente; ao reiniciar, execução que estava em voo vira `unknown` no ledger e o slot é liberado.
+
+**Ledger canônico (v0.31):** o MACRIX não reimplementa contabilidade. Com `~/.config/macrix/ledger.json` (`python` ≥ 3.11, `bridge` = `scripts/ledger_bridge.py` do triqhub-os fixado por SHA num worktree, `database`, `tenant`, `attempt_units`), cada `agent_run` faz `reserve → dispatch` antes de o processo existir e `settle` (unidades de tentativa, `price_version=attempt-units-v0`) ou `mark_unknown` (kill por timeout: reserva preservada, conta congelada até revisão) depois. Conta congelada recusa novas tentativas. O tenant é separado do do JEV. Sem o arquivo, o ledger fica desligado e o `agents_gate` diz isso. `env_inventory` é o censo do que os agentes têm aqui: MCPs, skills, commands, plugins, hooks, agentes do opencode, perfis do codex, skills do muse (só nomes).
 
 ## Voz: age antes de a frase acabar (v0.25)
 
