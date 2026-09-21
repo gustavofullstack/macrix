@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "macuse-open": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:35730/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MACUSE_OPEN_KEY}"
+      },
+      "mode": "optional"
+    }
+  }
+}
