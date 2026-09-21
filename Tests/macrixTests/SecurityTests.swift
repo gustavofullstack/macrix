@@ -22,6 +22,6 @@ final class SecurityTests: XCTestCase {
     func testHundredStill() {
         let r = ToolRegistry()
         registerAllTools(into: r)
-        XCTAssertEqual(r.list().count, 102)
+        XCTAssertEqual(r.list().count, 106)
     }
 }

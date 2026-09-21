@@ -225,7 +225,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         name: "health",
         description: "Server liveness, version, and capability summary.",
         inputSchema: objSchema([:])) { _ async in
-        textContent("\(mcpServerName) \(mcpServerVersion): ok. 102 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
+        textContent("\(mcpServerName) \(mcpServerVersion): ok. 106 tools (see GET /catalog). free tier 1000 calls/day/key, paid tiers unlimited. concurrent clients allowed.")
     })
 
     registry.register(Tool(
@@ -1003,6 +1003,7 @@ public func registerAllTools(into registry: ToolRegistry) {
         return textContent(VoiceActor.step(brain: brain, transcript: args["transcript"]?.string ?? "",
                                            isFinal: isFinal, utterance: VoiceShared.utterance, execute: execute))
     })
+    registerHarnessTools(into: registry)
     registry.register(Tool(
         name: "voice_listen",
         description: "Listen on the Mac microphone for N seconds (max 300); every partial transcript goes to Jev and acts mid-sentence. Needs Speech Recognition + Microphone permission for the macrix process. locale default pt-BR; execute default true.",
@@ -1016,6 +1017,60 @@ public func registerAllTools(into registry: ToolRegistry) {
         return textContent("voice_listen unavailable: Speech framework missing.", isError: true)
         #endif
     })
+}
+
+/// Harness family (v0.26): the CLIs on this Mac as tools, Jev picks the lane.
+func registerHarnessTools(into registry: ToolRegistry) {
+    registry.register(Tool(
+        name: "agents_list",
+        description: "Coding-agent lanes on this Mac (claude_fable/opus/sonnet, codex, antigravity, opencode, muse, goose): binary path or ABSENT, and the tier each lane is for.",
+        inputSchema: objSchema([:])) { _ async in textContent(Harness.listText()) })
+    registry.register(Tool(
+        name: "agent_run",
+        description: "Run one headless prompt on a lane inside an allowed workspace (~/Projetos, ~/Documents, /tmp). args: agent, prompt, workspace, model?, yolo? (\"true\" adds the CLI's auto-approve flag), timeout? (s, max 900). Returns exit code + bounded output.",
+        inputSchema: objSchema(["agent": "string", "prompt": "string", "workspace": "string", "model": "string", "yolo": "string", "timeout": "string"],
+                               required: ["agent", "prompt"])) { args async in
+        guard let a = Harness.Agent(rawValue: args["agent"]?.string ?? "") else {
+            return textContent("unknown agent; one of: " + Harness.Agent.allCases.map { $0.rawValue }.joined(separator: ", "), isError: true)
+        }
+        let r = Harness.run(a, prompt: args["prompt"]?.string ?? "", workspace: args["workspace"]?.string ?? "",
+                            model: args["model"]?.string, yolo: (args["yolo"]?.string ?? "false") == "true",
+                            timeout: Double(args["timeout"]?.string ?? "") ?? 300)
+        switch r {
+        case .failure(let e): return textContent(e.message, isError: true)
+        case .success(let ok):
+            let shown = ok.argv.map { $0 == (args["prompt"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) ? "<prompt>" : $0 }.joined(separator: " ")
+            return textContent("agent: \(ok.agent.rawValue)\nargv: \(shown)\nexit: \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s\(ok.truncated ? " · output truncated" : "")\n---\n\(ok.output)", isError: ok.exit != 0)
+        }
+    })
+    registry.register(Tool(
+        name: "agent_route",
+        description: "Ask Jev which lane a task deserves (hardest→claude_fable, medium→claude_opus, simple→claude_sonnet, bulk→muse) plus needs_review. args: task, available? (comma list), execute? (\"true\" runs it via agent_run), workspace?, yolo?.",
+        inputSchema: objSchema(["task": "string", "available": "string", "execute": "string", "workspace": "string", "yolo": "string"], required: ["task"])) { args async in
+        guard let key = Voice.apiKey() else { return textContent("jev unavailable: TYPESAFE_API_KEY missing.", isError: true) }
+        var avail = Harness.Agent.allCases.filter { Harness.resolve($0) != nil }
+        if let list = args["available"]?.string, !list.isEmpty {
+            let wanted = Set(list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            avail = avail.filter { wanted.contains($0.rawValue) }
+        }
+        let task = args["task"]?.string ?? ""
+        switch Harness.route(task: task, client: TypeSafeHTTP(key: key), available: avail) {
+        case .failure(let e): return textContent(e.message, isError: true)
+        case .success(let r):
+            var text = Harness.routeText(r)
+            if (args["execute"]?.string ?? "false") == "true" {
+                switch Harness.run(r.lane, prompt: task, workspace: args["workspace"]?.string ?? "", yolo: (args["yolo"]?.string ?? "false") == "true") {
+                case .failure(let e): text += "\nrun: \(e.message)"
+                case .success(let ok): text += "\nrun: exit \(ok.exit) · \(String(format: "%.1f", ok.seconds)) s\n---\n\(ok.output)"
+                }
+            }
+            return textContent(text)
+        }
+    })
+    registry.register(Tool(
+        name: "env_inventory",
+        description: "Read-only census of what agents can use on this Mac: MCP servers, skills, commands, plugins, hooks, opencode agents/providers, codex profiles, muse skills, installed lanes. Names only, no values.",
+        inputSchema: objSchema([:])) { _ async in textContent(EnvInventory.report()) })
 }
 
 /// One utterance memory shared by voice_decide calls from the same client stream.
